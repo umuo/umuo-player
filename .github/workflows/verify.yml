@@ -1,0 +1,45 @@
+name: Verify Spike
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - uses: gradle/actions/setup-gradle@0b6dd653ba04f4f93bf581ec31e66cbd7dcb644d # v4
+      - run: python3 tools/release_metadata.py
+      - run: ./gradlew --no-daemon -PenableAppleTargets=false :shared:jvmTest :playback-media3:testDebugUnitTest :app-mobile:assembleDebug :app-tv:assembleDebug :app-mobile:lintDebug :app-tv:lintDebug
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-debug-${{ github.run_number }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            app-mobile/build/outputs/apk/debug/*.apk
+            app-tv/build/outputs/apk/debug/*.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: android-check-reports
+          retention-days: 7
+          path: |
+            shared/build/reports/tests/jvmTest/
+            playback-media3/build/reports/tests/testDebugUnitTest/
+            app-*/build/reports/lint-results-debug.*

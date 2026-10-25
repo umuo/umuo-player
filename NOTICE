@@ -1,0 +1,19 @@
+Umuo Player architecture spike
+License: GNU Affero General Public License, version 3 (see LICENSE).
+
+The GestureMachine implementation is adapted from Peach Android:
+  Source file: app/src/main/java/video/peach/android/player/GestureMachine.kt
+  Source baseline: ba7ee7b (local peach-app checkout at extraction time)
+  Upstream project identified by that checkout: https://github.com/peach-mitao/peach
+  License: AGPL-3.0
+The Android playback configuration and gesture interactions are adapted from the
+same checkout's PlaybackViewModel.kt and PlayerPanel.kt. The new app separates
+those Android behaviors from Peach-specific network services. No Peach artwork
+or product branding is included.
+
+Gradle wrapper is copied from the Peach Android checkout; Gradle is Apache-2.0.
+Third-party libraries retain their respective licenses; see docs/DEPENDENCIES.md.
+
+The two original images under tools/fixture-art were generated with OpenAI Image
+Generation for synthetic fixture visualization. They are not movie studio artwork
+and are not included in the APK or substituted for user library artwork.

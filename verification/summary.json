@@ -1,0 +1,302 @@
+{
+  "date_utc": "2026-10-25",
+  "environment": "synthetic fixtures; Android emulator; see docs/VERIFICATION.md for limitations",
+  "jvm_suites": [
+    {
+      "name": "app.umuo.core.CatalogTest",
+      "tests": "7",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "app.umuo.core.ConnectionDraftTest",
+      "tests": "4",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "app.umuo.core.GestureBrightnessTest",
+      "tests": "2",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "app.umuo.core.LibraryTest",
+      "tests": "5",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "app.umuo.core.MediaRedirectTest",
+      "tests": "7",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "app.umuo.core.PlaybackCoordinatorTest",
+      "tests": "1",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "app.umuo.core.ProviderContractTest",
+      "tests": "11",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "app.umuo.core.ScanTrafficTest",
+      "tests": "5",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "app.umuo.core.ServerAddressTest",
+      "tests": "3",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    },
+    {
+      "name": "app.umuo.core.ServerClientTest",
+      "tests": "5",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    }
+  ],
+  "android_suites": [
+    {
+      "name": "app.umuo.android.SubtitleLabelsTest",
+      "tests": "7",
+      "failures": "0",
+      "errors": "0",
+      "skipped": "0"
+    }
+  ],
+  "ui_cases": [
+    {
+      "source": "WebDAV / Emby / Jellyfin synthetic fixtures",
+      "ui": "phone 320dp source switch/add; TV D-pad filters/settings; safe media redirects; scan pacing and cooldown",
+      "result": "passed",
+      "server": "loopback synthetic origins and CDN; no live OpenList server"
+    },
+    {
+      "source": "WebDAV with UA-bound redirects",
+      "ui": "Android phone; playback and seek; source/probe-CDN/engine-CDN 403 diagnostics and retry with rendered frames",
+      "result": "passed",
+      "server": "loopback synthetic origin and CDN; live OpenList/115 unverified"
+    },
+    {
+      "source": "synthetic WebDAV language-tagged sidecars",
+      "ui": "tablet launcher icon; touch test remote directions/confirm/back; mobile and TV Chinese subtitle labels/selection",
+      "result": "passed",
+      "server": "loopback fixtures; Android API 33 tablet-sized emulator; real TV/Pad hardware unverified"
+    },
+    {
+      "source": "TV input navigation on Pad",
+      "ui": "Android API 33; 1920x1200 at 240dpi; touch remote Back/Down; Done; populated-library entry focus; settings entry focus; metadata title; detail card restoration",
+      "result": "passed",
+      "server": "cached synthetic library; no remote changes"
+    },
+    {
+      "source": "TV input navigation",
+      "ui": "Android TV API 31; six source fields; search; settings; Back and focus restoration",
+      "result": "passed",
+      "server": "none; synthetic text; local validation only"
+    },
+    {
+      "source": "TV regression smoke",
+      "ui": "API 33 Pad; settings Back restores entry focus; TV UI unchanged",
+      "result": "passed",
+      "server": "cached synthetic library only"
+    },
+    {
+      "source": "WebDAV and Jellyfin mobile redesign",
+      "ui": "native API 33; selected design comparison; playback/resume; filters; directories; search/favorites/collections; source switching; 320dp/font130/tablet",
+      "result": "passed",
+      "server": "marked synthetic read-only media fixture and in-memory client fixture; not real server compatibility"
+    },
+    {
+      "source": "TV focus regression",
+      "ui": "API33 Pad; settings Back and entry focus",
+      "result": "passed",
+      "server": "cached synthetic source"
+    },
+    {
+      "source": "WebDAV mode navigation",
+      "ui": "native API33; persistent selected mode tabs; round trips; scroll/detail/subfolder; empty new library; restart; 320dp/font130/tablet; server-only library preserved",
+      "result": "passed",
+      "server": "marked synthetic WebDAV and Jellyfin fixtures; no real media modifications"
+    },
+    {
+      "source": "WEBDAV",
+      "ui": "phone and TV-size metadata catalog: strict membership; genres/tags/sets; cross-season inheritance; mode restore",
+      "result": "passed",
+      "server": "synthetic fixtures; not real-server compatibility"
+    },
+    {
+      "source": "WEBDAV",
+      "ui": "mobile",
+      "result": "passed",
+      "server": "synthetic Basic-auth fixture; Android API 33 emulator"
+    },
+    {
+      "source": "WebDAV",
+      "ui": "Android phone: single tap preserves folder; double tap returns home/top; brightness increments; pending drafts; lock; 403/404 retry",
+      "result": "passed",
+      "server": "synthetic Basic/Range fixture"
+    },
+    {
+      "source": "WebDAV",
+      "ui": "mobile: 320dp toolbar; wrapped speed choices; empty subtitles; exact end seek; replay from start",
+      "result": "passed",
+      "server": "synthetic Basic/Range fixture"
+    },
+    {
+      "source": "WebDAV",
+      "ui": "TV size on general Android runtime: D-pad seek to end; replay from start; return focus",
+      "result": "passed",
+      "server": "synthetic Basic/Range fixture"
+    },
+    {
+      "source": "EMBY",
+      "ui": "mobile",
+      "result": "passed",
+      "server": "synthetic fixture; not real server compatibility"
+    },
+    {
+      "source": "JELLYFIN",
+      "ui": "mobile",
+      "result": "passed",
+      "server": "synthetic fixture; not real server compatibility"
+    },
+    {
+      "source": "WEBDAV",
+      "ui": "mobile",
+      "result": "passed",
+      "server": "synthetic fixture; not real server compatibility"
+    },
+    {
+      "source": "EMBY",
+      "ui": "phone and TV-size: login; resume/nextup/latest/collections; search empty; favorite/watch changes; denied mutation preserves state; TV search Back and focus",
+      "result": "passed",
+      "server": "synthetic fixtures; not real-server compatibility"
+    },
+    {
+      "source": "JELLYFIN",
+      "ui": "phone: login; native library; favorite/watch changes; nextup; server-authoritative empty resume; double-tap home; Back from favorites",
+      "result": "passed",
+      "server": "synthetic fixtures; not real-server compatibility"
+    },
+    {
+      "source": "synthetic SRT and VTT sidecars",
+      "ui": "Android portrait/landscape and TV-sized runtime; transparent captions; D-pad control focus",
+      "result": "passed",
+      "server": "loopback WebDAV fixtures; real TV hardware unverified"
+    },
+    {
+      "source": "WEBDAV",
+      "ui": "tv",
+      "result": "passed",
+      "server": "synthetic fixture; not real server compatibility"
+    }
+  ],
+  "format_matrix": [
+    {
+      "case": "HEVC",
+      "mode": "WebDAV direct",
+      "duration": "0:12",
+      "first_frame_ms": 852,
+      "error": null,
+      "passed": true
+    },
+    {
+      "case": "MultiAudio",
+      "mode": "WebDAV direct",
+      "duration": "0:20",
+      "first_frame_ms": 781,
+      "error": null,
+      "passed": true,
+      "available_audio_tracks": [
+        "und · audio/mp4a-latm"
+      ]
+    },
+    {
+      "case": "HighBitrate",
+      "mode": "WebDAV direct",
+      "duration": "0:08",
+      "first_frame_ms": 850,
+      "error": null,
+      "passed": true
+    },
+    {
+      "case": "HLS",
+      "mode": "Emby compatibility",
+      "first_frame_ms": 665,
+      "passed": true
+    }
+  ],
+  "metrics": [
+    {
+      "case": "0.1.4-ua-metrics",
+      "first_frame_ms": [
+        2092,
+        832,
+        599,
+        653
+      ],
+      "seek_ready_ms": [
+        81
+      ]
+    },
+    {
+      "case": "phone-emby-metrics",
+      "first_frame_ms": [],
+      "seek_ready_ms": []
+    },
+    {
+      "case": "phone-jellyfin-metrics",
+      "first_frame_ms": [],
+      "seek_ready_ms": []
+    },
+    {
+      "case": "phone-webdav-metrics",
+      "first_frame_ms": [
+        1910
+      ],
+      "seek_ready_ms": [
+        119
+      ]
+    },
+    {
+      "case": "tv-webdav-metrics",
+      "first_frame_ms": [
+        579
+      ],
+      "seek_ready_ms": [
+        262
+      ]
+    }
+  ],
+  "lint": {
+    "app-mobile": {
+      "Error": 0,
+      "Fatal": 0,
+      "Warning": 33
+    },
+    "app-tv": {
+      "Error": 0,
+      "Fatal": 0,
+      "Warning": 1
+    }
+  }
+}

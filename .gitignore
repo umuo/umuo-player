@@ -1,0 +1,24 @@
+*.iml
+.gradle/
+.kotlin/
+**/build/
+local.properties
+.DS_Store
+*.keystore
+*.jks
+.env*
+!*.example
+verification/local/
+
+dist/
+**/__pycache__/
+
+# Signing material and local IDE state
+.signing/
+*.p12
+*.pfx
+*.pem
+.idea/
+**/xcuserdata/
+DerivedData/
+*.xcuserstate

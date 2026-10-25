@@ -1,0 +1,58 @@
+// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+A001 = { isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UmuoProbeApp.swift; sourceTree = "<group>"; };
+A002 = { isa = PBXGroup; children = (A001, A003); sourceTree = "<group>"; };
+A003 = { isa = PBXGroup; children = (B001, C001); name = Products; sourceTree = "<group>"; };
+B001 = { isa = PBXFileReference; explicitFileType = wrapper.application; path = "UmuoProbe-iOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+B002 = { isa = PBXBuildFile; fileRef = A001; };
+B003 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B002); runOnlyForDeploymentPostprocessing = 0; };
+B004 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+B005 = { isa = PBXNativeTarget; buildConfigurationList = B006; buildPhases = (B003,B004); buildRules = (); dependencies = (); name = "UmuoProbe-iOS"; productName = "UmuoProbe-iOS"; productReference = B001; productType = "com.apple.product-type.application"; };
+B006 = { isa = XCConfigurationList; buildConfigurations = (B007,B008); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+B007 = { isa = XCBuildConfiguration; name = Debug; buildSettings = {
+    PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = "app.umuo.probe.iphoneos";
+    SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+    ARCHS = arm64; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Automatic;
+    IPHONEOS_DEPLOYMENT_TARGET = 16.0; TARGETED_DEVICE_FAMILY = "1,2"; ENABLE_USER_SCRIPT_SANDBOXING = YES;
+    KMP_TARGET = iosSimulatorArm64; "KMP_TARGET[sdk=iphoneos*]" = iosArm64;
+    FRAMEWORK_SEARCH_PATHS = "$(SRCROOT)/../shared/build/bin/$(KMP_TARGET)/debugFramework";
+    OTHER_LDFLAGS = ("$(inherited)", "-framework", UmuoShared, "-lsqlite3");
+  }; };
+B008 = { isa = XCBuildConfiguration; name = Release; buildSettings = {
+    PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = "app.umuo.probe.iphoneos";
+    SDKROOT = iphoneos; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+    ARCHS = arm64; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Automatic;
+    IPHONEOS_DEPLOYMENT_TARGET = 16.0; TARGETED_DEVICE_FAMILY = "1,2"; ENABLE_USER_SCRIPT_SANDBOXING = YES;
+    KMP_TARGET = iosSimulatorArm64; "KMP_TARGET[sdk=iphoneos*]" = iosArm64;
+    FRAMEWORK_SEARCH_PATHS = "$(SRCROOT)/../shared/build/bin/$(KMP_TARGET)/debugFramework";
+    OTHER_LDFLAGS = ("$(inherited)", "-framework", UmuoShared, "-lsqlite3");
+  }; };
+C001 = { isa = PBXFileReference; explicitFileType = wrapper.application; path = "UmuoProbe-tvOS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+C002 = { isa = PBXBuildFile; fileRef = A001; };
+C003 = { isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (C002); runOnlyForDeploymentPostprocessing = 0; };
+C004 = { isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+C005 = { isa = PBXNativeTarget; buildConfigurationList = C006; buildPhases = (C003,C004); buildRules = (); dependencies = (); name = "UmuoProbe-tvOS"; productName = "UmuoProbe-tvOS"; productReference = C001; productType = "com.apple.product-type.application"; };
+C006 = { isa = XCConfigurationList; buildConfigurations = (C007,C008); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+C007 = { isa = XCBuildConfiguration; name = Debug; buildSettings = {
+    PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = "app.umuo.probe.appletvos";
+    SDKROOT = appletvos; SUPPORTED_PLATFORMS = "appletvos appletvsimulator";
+    ARCHS = arm64; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Automatic;
+    TVOS_DEPLOYMENT_TARGET = 16.0; TARGETED_DEVICE_FAMILY = 3; ENABLE_USER_SCRIPT_SANDBOXING = YES;
+    KMP_TARGET = tvosSimulatorArm64; "KMP_TARGET[sdk=appletvos*]" = tvosArm64;
+    FRAMEWORK_SEARCH_PATHS = "$(SRCROOT)/../shared/build/bin/$(KMP_TARGET)/debugFramework";
+    OTHER_LDFLAGS = ("$(inherited)", "-framework", UmuoShared, "-lsqlite3");
+  }; };
+C008 = { isa = XCBuildConfiguration; name = Release; buildSettings = {
+    PRODUCT_NAME = "$(TARGET_NAME)"; PRODUCT_BUNDLE_IDENTIFIER = "app.umuo.probe.appletvos";
+    SDKROOT = appletvos; SUPPORTED_PLATFORMS = "appletvos appletvsimulator";
+    ARCHS = arm64; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; GENERATE_INFOPLIST_FILE = YES; CODE_SIGN_STYLE = Automatic;
+    TVOS_DEPLOYMENT_TARGET = 16.0; TARGETED_DEVICE_FAMILY = 3; ENABLE_USER_SCRIPT_SANDBOXING = YES;
+    KMP_TARGET = tvosSimulatorArm64; "KMP_TARGET[sdk=appletvos*]" = tvosArm64;
+    FRAMEWORK_SEARCH_PATHS = "$(SRCROOT)/../shared/build/bin/$(KMP_TARGET)/debugFramework";
+    OTHER_LDFLAGS = ("$(inherited)", "-framework", UmuoShared, "-lsqlite3");
+  }; };
+D001 = { isa = PBXProject; attributes = { LastUpgradeCheck = 1640; }; buildConfigurationList = D002; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A002; productRefGroup = A003; projectDirPath = ""; projectRoot = ""; targets = (B005,C005); };
+D002 = { isa = XCConfigurationList; buildConfigurations = (D003,D004); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+D003 = { isa = XCBuildConfiguration; name = Debug; buildSettings = { CLANG_ENABLE_MODULES = YES; }; };
+D004 = { isa = XCBuildConfiguration; name = Release; buildSettings = { CLANG_ENABLE_MODULES = YES; }; };
+}; rootObject = D001; }

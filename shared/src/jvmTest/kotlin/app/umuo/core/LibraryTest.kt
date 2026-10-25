@@ -1,0 +1,101 @@
+package app.umuo.core
+
+import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import app.umuo.core.db.UmuoDatabase
+import app.umuo.core.library.*
+import app.umuo.core.metadata.*
+import app.umuo.core.model.*
+import app.umuo.core.playback.*
+import app.umuo.core.source.webdav.*
+import io.ktor.client.*
+import io.ktor.client.engine.mock.*
+import io.ktor.http.*
+import kotlinx.coroutines.test.runTest
+import kotlin.test.*
+
+class LibraryTest {
+    @Test fun editingConnectionPreservesProgressUnlessIdentityChanges() {
+        val (r,driver)=repository()
+        try {
+            val a=SourceConnection("a","NAS",SourceKind.WEBDAV,"https://nas/dav/","alice")
+            val b=a.copy(id="b",username="bob")
+            r.saveConnection(a);r.saveConnection(b)
+            val item=MediaItem(MediaId("a","same-id"),"Old")
+            val other=item.copy(id=MediaId("b","same-id"))
+            r.upsert(item,"/");r.upsert(other,"/");r.savePosition(item.id,9000);r.savePosition(other.id,3000)
+            r.match(item,item.copy(title="Override"));r.enqueue("a","/unfinished")
+            r.saveConnection(a.copy(name="Renamed"))
+            assertEquals(9000,r.position(item.id));assertEquals("Override",r.items("a").single().title)
+            r.saveConnection(a.copy(username="charlie"))
+            assertTrue(r.items("a").isEmpty());assertEquals(0,r.position(item.id))
+            assertTrue(r.pending("a").isEmpty());assertTrue(r.automaticMatchAllowed(item.id))
+            assertEquals(3000,r.position(other.id));assertEquals(1,r.items("b").size)
+            assertEquals(2,r.connections().size)
+        } finally {driver.close()}
+    }
+    private fun repository(): Pair<LibraryRepository,JdbcSqliteDriver> {
+        val driver=JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        UmuoDatabase.Schema.create(driver)
+        return LibraryRepository(UmuoDatabase(driver)) to driver
+    }
+    @Test fun sourceIdentityProgressOverridesAndQueueSurviveRepositoryRecreation() {
+        val (r,driver)=repository()
+        try {
+            val a=MediaItem(MediaId("a","same-id"),"A");val b=a.copy(id=MediaId("b","same-id"),title="B")
+            r.upsert(a,"/");r.upsert(b,"/");r.savePosition(a.id,1234);r.savePosition(b.id,5678)
+            r.match(a,a.copy(title="Correct",metadataId="tmdb:1"));r.enqueue("a","/pending")
+            val restored=LibraryRepository(UmuoDatabase(driver))
+            assertEquals(1234,restored.position(a.id));assertEquals(5678,restored.position(b.id))
+            assertEquals("Correct",restored.items("a").single().title)
+            restored.saveDuration(a.id,60_000)
+            assertEquals(60_000,restored.recent("a").single().durationMs)
+            assertEquals(1234,restored.recent("a").single().resumeMs)
+            assertEquals(listOf("/pending"),restored.pending("a"))
+            restored.match(a,null);assertFalse(restored.automaticMatchAllowed(a.id));assertEquals("A",restored.items("a").single().title)
+        }finally{driver.close()}
+    }
+    @Test fun filenameAndNfoPreserveEpisodeIdentity() {
+        val item=FilenameParser.parse(MediaItem(MediaId("s","file"),"Planet.Earth.S02E03.1080p.mkv"))
+        assertEquals("Planet Earth",item.series);assertEquals(2,item.season);assertEquals(3,item.episode)
+        val result=NfoParser.apply(item,"""<episodedetails><title>中文集名</title><showtitle>地球</showtitle><season>2</season><episode>3</episode><plot>A &amp; B</plot><uniqueid type="tmdb">42</uniqueid><unknown>ignored</unknown></episodedetails>""")
+        assertEquals(item.id,result.id);assertEquals("中文集名",result.title);assertEquals("A & B",result.overview);assertEquals("tmdb:42",result.metadataId)
+        assertEquals(2024,FilenameParser.parse(item.copy(title="Arrival.2024.1080p.mp4")).year)
+        assertFailsWith<IllegalArgumentException>{NfoParser.apply(item,"""<!DOCTYPE x [<!ENTITY x SYSTEM "file:///secret">]><movie/>""")}
+    }
+    @Test fun scanFailurePreservesCacheAndResumableQueue()=runTest {
+        val (r,driver)=repository()
+        val source="https://dav.test/videos/"
+        val old=MediaItem(MediaId("dav",source+"old.mp4"),"Old")
+        r.upsert(old,source)
+        var healthy=false
+        val client=HttpClient(MockEngine {request->
+            if(!healthy)respond("unavailable",HttpStatusCode.ServiceUnavailable) else {
+                assertEquals("PROPFIND",request.method.value)
+                respond("""<d:multistatus xmlns:d="DAV:"><d:response><d:href>/videos/new.mp4</d:href><d:propstat><d:prop><d:displayname>New.2024.mp4</d:displayname><d:resourcetype/><d:getetag>v1</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>""",headers=headersOf("Content-Type","application/xml"))
+            }
+        })
+        val p=WebDavProvider(SourceConnection("dav","DAV",SourceKind.WEBDAV,source),client,MemorySecrets())
+        try {
+            val scanner=LibraryScanner(r);scanner.scan(p)
+            assertEquals("Old",r.items("dav").single().title);assertEquals(listOf(source),r.pending("dav"));assertEquals(1,scanner.state.value.failures)
+            healthy=true;scanner.scan(p)
+            assertEquals("New",r.items("dav").single().title);assertEquals(2024,r.items("dav").single().year);assertTrue(r.pending("dav").isEmpty())
+            var searches=0
+            val metadata=object:MetadataProvider {
+                override suspend fun search(title:String,year:Int?,television:Boolean):List<MediaItem> {
+                    searches++
+                    return listOf(MediaItem(MediaId("tmdb","1"),"New",MediaKind.MOVIE,year=2024,metadataId="tmdb:1"))
+                }
+                override suspend fun details(id:String,television:Boolean):MediaItem=error("not needed")
+            }
+            assertEquals(0,searches) // 默认扫描没有元数据服务调用。
+            scanner.scan(p,metadata);assertEquals(1,searches);assertEquals("tmdb:1",r.items("dav").single().metadataId)
+            val matched=r.items("dav").single();r.match(matched,null)
+            scanner.scan(p,metadata);assertEquals(1,searches);assertNull(r.items("dav").single().metadataId)
+
+        }finally{p.close();client.close();driver.close()}
+    }
+    @Test fun gestureCancellationRestoresOriginalSpeed() {
+        val g=GestureMachine();g.down(1.25f);assertTrue(g.hold());assertEquals(1.25f,g.release());assertEquals(GestureMachine.Mode.IDLE,g.mode);assertNull(g.release())
+    }
+}
