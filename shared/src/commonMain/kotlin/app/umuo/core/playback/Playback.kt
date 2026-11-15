@@ -26,7 +26,8 @@ data class PlaybackState(
     val ready: Boolean = false, val playing: Boolean = false, val buffering: Boolean = false,
     val positionMs: Long = 0, val durationMs: Long = 0, val speed: Float = 1f,
     val audioTracks: List<TrackChoice> = emptyList(), val subtitles: List<TrackChoice> = emptyList(),
-    val error: String? = null, val failureKind: PlaybackFailureKind? = null, val ended: Boolean = false, val seekable: Boolean = true
+    val error: String? = null, val failureKind: PlaybackFailureKind? = null, val ended: Boolean = false, val seekable: Boolean = true,
+    val paused: Boolean = false
 )
 interface PlaybackEngine {
     val state: StateFlow<PlaybackState>

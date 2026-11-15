@@ -197,3 +197,24 @@ Pad 内容页补充：合成剧集单集详情中，「匹配标题」输入返�
 新建未扫描的合成来源，验证「还没有已刮削的影视」页面仍可直接切回文件浏览，不需要先扫描。切至 Jellyfin 合成来源时不显示 WebDAV 文件模式，切回原来源后模式正确。320dp / 130% 字号与平板 1920×1200 / 240dpi 的双向切换通过。证据位于 `verification/local/0.1.9/`。
 
 两端构建和 Lint 通过，Android 规则测试 7 项通过；共享核心未修改，沿用既有 50 项通过记录。TV APK 在 API 33 Pad 模拟器中补测设置返回和入口焦点恢复通过。本轮不扩大播放格式或真实服务器兼容结论。
+
+## 同源播放器问题修复与全量验证
+
+- 问题修复与收敛：
+  - `shared` 播放协调与数据扫描：`PlaybackState` 补充 `paused` 语义，`PlaybackCoordinator` 增加 `isUserPaused()`、`everReady`、`lastRequest` 与 `refreshPlan(positionMs)`，避免缓冲阶段误报暂停进度、停止播放时保留最后 seek 位置并在刷新播放计划时维持同一会话；`LibraryRepository` / `LibraryScanner` 增加批处理事务与 `overrideMap()` / `seriesByPath` 缓存；`WebDavProvider` 与 `MediaServerProvider` 补齐 `dfxp` / `vtt` / `webvtt` 字幕映射并将列表解析调度至后台线程。
+  - `playback-media3` 与活动生命周期：`Media3Engine` 统一异常重连策略、快速 seek 合并与尾部夹紧及有限次自动恢复（`PlaybackResilience.kt` 抽出纯规则便于单测），暴露 `pipAspectRatio()`；`SourceNetwork`、`SourceImages`、`VideoThumbnails` 统一网络池复用与关闭逻辑；`PlayerModel` 将网络与重连请求移至后台分发并修正服务器搜索与清除搜索状态；移动端 `MainActivity` 补齐画中画参数构建与尺寸更新。
+  - UI 安全提示与 R8 收敛：Mobile 端与 TV 端补充独立 `HTTP · 未加密` / `HTTP 未加密` 明文连接警示，错误态下保持播放控制栏不自动隐藏；启用 `app-mobile` 与 `app-tv` 的 Release 代码混淆与资源收缩（`proguard-rules.pro`）。
+- 单元测试、Lint、Apple 编译边界与 R8 构建：
+  - `:shared:jvmTest`：53 项通过（0 失败，0 跳过；含新增状态汇报与仓储覆盖单测）。
+  - `:playback-media3:testDebugUnitTest`：12 项通过（0 失败，0 跳过；含新增弹性策略单测）。
+  - `-PenableAppleTargets=false` 下的 `:app-mobile:assembleDebug`、`:app-tv:assembleDebug`、`:app-mobile:lintDebug`（0 errors, 39 warnings）、`:app-tv:lintDebug`（0 errors, 1 warning）均通过。
+  - Apple KMP 编译边界：`:shared:compileKotlinIosSimulatorArm64` 与 `:shared:compileKotlinTvosSimulatorArm64` 编译通过。
+  - R8 Release 检查（使用临时 JKS）：`:app-mobile:assembleRelease`（3,314,079 B，Debug 为 23,489,447 B）、`:app-tv:assembleRelease`（3,186,713 B，Debug 为 23,601,640 B）、`:app-mobile:lintRelease`（0 errors, 25 warnings）、`:app-tv:lintRelease`（0 errors, 1 warning）全部通过。
+- API 33 ARM64 模拟器与合成样片运行验证（`Pixel_3a_API_33_arm64-v8a`，本地 `tools/fixture_server.py`）：
+  - R8 Release 冒烟（Mobile Jellyfin 样片）：冷启直连 40s 样片正常起播（`first_frame_ms=5501`），呈现 `FixtureJELLYFIN · HTTP 未加密`，`events.jsonl` 有序上报 `Playing -> Progress(IsPaused=false) -> Stopped`，无混淆崩溃或异常日志。
+  - Debug Mobile WebDAV：验证 `HTTP · 未加密` 徽标、影视库 NFO/海报扫描、外挂 SRT 字幕选择及 `+10 秒` 跳转（`first_frame_ms=2491`、`seek_ready_ms=2594`），截图检查通过。
+  - Debug Mobile Jellyfin + 交互压测：验证 `HTTP · 未加密`、ASCII 搜索（`Arrival`）与清除搜索恢复、22 次快速 `±10 秒` 点击、横向滑动 seek 及 40s 尾部夹紧后恢复播放（`first_frame_ms=3767`、`seek_ready_ms=4175 / 684 / 3855`），`events.jsonl` 仅记录有序进度且无 `IsPaused: true` 误报；点击画中画按钮确认进入 16:9 `mode=pinned` 悬浮窗并在首帧渲染后正常显示视频画面（实测发现若首帧尚未解码完成即触发画中画，悬浮窗内会短暂呈黑屏）。
+  - Debug TV WebDAV + 焦点压测：经由 `TvTextField` 焦点编辑流程连入合成源并呈现 `HTTP 未加密`，切换影视库扫描展示海报墙；核验详情页点击「返回媒体库」后直接按确认键即可恢复焦点重新打开详情；完成 12 次连续遥控器左右键快速 seek（`first_frame_ms=1175`），无播放错误或 `FATAL EXCEPTION`。
+- 验证限制：
+  - 上述运行验证均基于合成样片与本机受控服务；真实 NAS / WebDAV / Emby / Jellyfin 服务器、Apple 平台运行时实际播放、HDR 映射及音频直通均未实测，不扩大兼容结论。
+  - 原始测试日志与截图存放在已忽略的 `verification/local/`（`r8-smoke/` 与 `current/`），测试后已终止模拟器与临时服务器进程。

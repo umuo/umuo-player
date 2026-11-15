@@ -1,0 +1,96 @@
+package app.umuo.android
+
+import androidx.media3.common.PlaybackException
+import app.umuo.core.network.MediaRedirectFailure
+import app.umuo.core.playback.PlaybackFailureKind
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class PlaybackResilienceTest {
+    @Test fun clampSeekPositionLeavesSafeTailMargin() {
+        assertEquals(0L, clampSeekPosition(-500L, 60_000L))
+        assertEquals(59_500L, clampSeekPosition(60_000L, 60_000L))
+        assertEquals(59_500L, clampSeekPosition(65_000L, 60_000L))
+        assertEquals(900L, clampSeekPosition(1_200L, 1_000L))
+        assertEquals(200L, clampSeekPosition(500L, 200L))
+        assertEquals(0L, clampSeekPosition(-10L, 0L))
+        assertEquals(12_000L, clampSeekPosition(12_000L, 0L))
+    }
+
+    @Test fun pipAspectRatioReducesAndClampsToSystemRange() {
+        assertEquals(16 to 9, pipAspectRatio(0, 0))
+        assertEquals(16 to 9, pipAspectRatio(1920, 1080))
+        assertEquals(4 to 3, pipAspectRatio(1440, 1080))
+        assertEquals(9 to 16, pipAspectRatio(1080, 1920))
+        assertEquals(239 to 100, pipAspectRatio(3840, 1000))
+        assertEquals(100 to 239, pipAspectRatio(1000, 3840))
+    }
+
+    @Test fun isOutOfRangeDetects416AndOutOfRangeCode() {
+        assertTrue(isOutOfRangeCode(PlaybackException.ERROR_CODE_IO_READ_POSITION_OUT_OF_RANGE, null))
+        assertTrue(isOutOfRangeCode(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS, 416))
+        assertFalse(isOutOfRangeCode(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED, 500))
+        assertFalse(isOutOfRangeError(RuntimeException("network", IllegalStateException("offline"))))
+    }
+
+    @Test fun needsPlanRefreshDetectsSignedExpiryRedirectAndDecodeFailure() {
+        assertTrue(needsPlanRefreshCode(PlaybackException.ERROR_CODE_DECODING_FAILED, null, false))
+        for (status in listOf(401, 403, 404, 410)) {
+            assertTrue(needsPlanRefreshCode(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS, status, false))
+        }
+        assertFalse(needsPlanRefreshCode(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS, 500, false))
+        assertTrue(needsPlanRefreshError(RuntimeException("wrap", MediaRedirectFailure("redirect failed"))))
+        assertTrue(needsPlanRefreshError(RuntimeException("wrap", UnsafeMediaRedirect())))
+        assertFalse(needsPlanRefreshError(RuntimeException("wrap", IllegalStateException("other"))))
+    }
+
+    @Test fun shouldAutoRecoverRequiresFirstFrameBudgetAndRecoverableError() {
+        assertTrue(
+            shouldAutoRecoverCode(
+                hadFirstFrame = true,
+                attempts = 0,
+                maxAttempts = 2,
+                errorCode = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+                failureKind = PlaybackFailureKind.NETWORK
+            )
+        )
+        assertFalse(
+            shouldAutoRecoverCode(
+                hadFirstFrame = false,
+                attempts = 0,
+                maxAttempts = 2,
+                errorCode = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+                failureKind = PlaybackFailureKind.NETWORK
+            )
+        )
+        assertFalse(
+            shouldAutoRecoverCode(
+                hadFirstFrame = true,
+                attempts = 2,
+                maxAttempts = 2,
+                errorCode = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+                failureKind = PlaybackFailureKind.NETWORK
+            )
+        )
+        assertFalse(
+            shouldAutoRecoverCode(
+                hadFirstFrame = true,
+                attempts = 0,
+                maxAttempts = 2,
+                errorCode = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                failureKind = PlaybackFailureKind.TLS
+            )
+        )
+        assertFalse(
+            shouldAutoRecoverCode(
+                hadFirstFrame = true,
+                attempts = 0,
+                maxAttempts = 2,
+                errorCode = PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+                failureKind = PlaybackFailureKind.UNSUPPORTED
+            )
+        )
+    }
+}

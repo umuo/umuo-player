@@ -60,14 +60,17 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     private val mutable = MutableStateFlow(BrowserState(connections = displayedConnections(),drafts=library.drafts(), tmdbEnabled = secrets.read("tmdb:enabled") == "true"))
     val state = mutable.asStateFlow()
     val scanner = LibraryScanner(library)
-    val engine = Media3Engine(application, viewModelScope, { id -> mutable.value.connections.firstOrNull { it.id == id } }, secrets)
-    private val coordinator = PlaybackCoordinator(engine, library, viewModelScope) { message -> mutable.update { it.copy(warning = message) } }
+    val engine: Media3Engine = Media3Engine(application, viewModelScope, { id -> mutable.value.connections.firstOrNull { it.id == id } }, secrets) { posMs ->
+        coordinator.refreshPlan(posMs)
+    }
+    private val coordinator: PlaybackCoordinator = PlaybackCoordinator(engine, library, viewModelScope) { message -> mutable.update { it.copy(warning = message) } }
     private var provider: MediaSourceProvider? = null
     private var browseJob: Job? = null
     private var scanJob: Job? = null
     private var playJob: Job? = null
     private var userActionJob: Job? = null
     private var serverHomeJob: Job? = null
+    private var preSearchServerView: ServerView? = null
     private val history = mutableListOf<String?>()
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -99,8 +102,8 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
                 library.saveDraft(c)
                 refreshConnections()
                 candidate = createProvider(c,staged)
-                val authenticated = candidate.authenticate(MediaCredentials(username,staged.read("$id:password").orEmpty()))
-                val firstPage = candidate.browse(null)
+                val authenticated = withContext(Dispatchers.IO) { candidate.authenticate(MediaCredentials(username,staged.read("$id:password").orEmpty())) }
+                val firstPage = withContext(Dispatchers.IO) { candidate.browse(null) }
                 scanJob?.cancelAndJoin()
                 staged.commit { library.saveConnection(authenticated) }
                 refreshConnections()
@@ -115,6 +118,7 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     }
     private fun activate(source: MediaSourceProvider, c: SourceConnection) {
         scanJob?.cancel();userActionJob?.cancel();serverHomeJob?.cancel();provider?.close(); provider = source; history.clear()
+        preSearchServerView = null
         uiPreferences.edit().putString("source",c.id).apply()
         mutable.update { it.copy(connection = c, serverType=null,serverView=ServerView.LIBRARIES,serverSearch="",userActionBusy=false,parent = null, selected = null, items = emptyList(), recent = library.recent(c.id), wall = false, catalogFilter=CatalogFilter(),catalogItems=emptyList(),series = null, nextOffset = null, error = null,warning=null) }
     }
@@ -126,7 +130,7 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
             mutable.update { it.copy(busy = true) }
             try {
                 activate(registry.create(c), c)
-                if(c.kind==SourceKind.WEBDAV && uiPreferences.getBoolean("catalog:${c.id}",false)) showWall() else loadPage(null)
+                if(c.kind==SourceKind.WEBDAV && uiPreferences.getBoolean("catalog:${c.id}",false)) loadWall(c) else loadPage(null)
             }
             catch(e: CancellationException) { throw e }
             catch(e: Exception) { mutable.update { it.copy(error = safeMessage(e)) } }
@@ -135,22 +139,30 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     }
     private suspend fun loadPage(parent: String?, offset: Int = 0) {
         val source = provider ?: return
-        val page = if(source is MediaServerProvider && parent==null) source.listing(ServerLibraryQuery(state.value.serverView,state.value.serverSearch),offset) else source.browse(parent, offset)
+        val query = ServerLibraryQuery(state.value.serverView, state.value.serverSearch)
+        val page = withContext(Dispatchers.IO) {
+            if(source is MediaServerProvider && parent==null) source.listing(query, offset) else source.browse(parent, offset)
+        }
         applyPage(source,page,parent,offset)
     }
-    private fun applyPage(source: MediaSourceProvider, page: MediaPage, parent: String?, offset: Int = 0) {
-        val display = page.items.map { item ->
-            if(source is WebDavProvider) {
-                val cached=library.indexed(item.id)
-                if(cached==null && !item.isFolder) library.upsert(item,parent ?: source.connection.baseUrl)
-                library.applyOverride(cached ?: item)
-            } else {
-                if(!item.isFolder) library.upsert(item, parent.orEmpty())
-                item
+    private suspend fun applyPage(source: MediaSourceProvider, page: MediaPage, parent: String?, offset: Int = 0) {
+        val (display, recentList) = withContext(Dispatchers.IO) {
+            library.transactionWithResult {
+                val items = page.items.map { item ->
+                    if(source is WebDavProvider) {
+                        val cached=library.indexed(item.id)
+                        if(cached==null && !item.isFolder) library.upsert(item,parent ?: source.connection.baseUrl)
+                        library.applyOverride(cached ?: item)
+                    } else {
+                        if(!item.isFolder) library.upsert(item, parent.orEmpty())
+                        item
+                    }
+                }
+                items to library.recent(source.connection.id)
             }
         }
         mutable.update { it.copy(items = (if(offset == 0) emptyList() else it.items) + display,
-            recent = library.recent(source.connection.id),
+            recent = recentList,
             parent = parent, nextOffset = page.nextOffset, selected = null) }
         if(parent==null && offset==0)refreshServerHome()
     }
@@ -161,9 +173,13 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
         serverHomeJob=viewModelScope.launch {
             val message="服务器续看暂不可用，显示本机记录"
             try {
-                val recent=source.listing(ServerLibraryQuery(ServerView.RESUME)).items
+                val recent=withContext(Dispatchers.IO) { source.listing(ServerLibraryQuery(ServerView.RESUME)).items }
                 if(state.value.connection?.id==source.connection.id && state.value.serverView==ServerView.LIBRARIES && state.value.parent==null && state.value.serverSearch.isBlank()) {
-                    recent.forEach {library.upsert(it,"");library.savePosition(it.id,it.resumeMs)}
+                    withContext(Dispatchers.IO) {
+                        library.transaction {
+                            recent.forEach {library.upsert(it,"");library.savePosition(it.id,it.resumeMs)}
+                        }
+                    }
                     mutable.update {it.copy(recent=recent,warning=if(it.warning==message)null else it.warning)}
                 }
             } catch(e: CancellationException){throw e}
@@ -221,13 +237,37 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
                 catch(e: Exception) { mutable.update { it.copy(error = safeMessage(e)) } }
                 finally { mutable.update { it.copy(busy = false) } }
             }
-        } else if(provider is MediaServerProvider && (state.value.serverView!=ServerView.LIBRARIES || state.value.serverSearch.isNotBlank())) {
+        } else if(provider is MediaServerProvider && state.value.serverSearch.isNotBlank()) {
+            clearServerSearch()
+        } else if(provider is MediaServerProvider && state.value.serverView!=ServerView.LIBRARIES) {
             showServerView(ServerView.LIBRARIES)
         }
     }
     fun showServerCatalog(type: MediaKind?) = showServerView(when(type) {MediaKind.MOVIE->ServerView.MOVIES;MediaKind.SERIES->ServerView.SERIES;else->ServerView.LIBRARIES})
+    fun searchServer(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            if (state.value.serverSearch.isNotBlank()) clearServerSearch()
+            return
+        }
+        val currentView = state.value.serverView
+        if (state.value.serverSearch.isBlank()) {
+            preSearchServerView = currentView
+        }
+        val targetView = when (currentView) {
+            ServerView.MOVIES, ServerView.SERIES, ServerView.FAVORITES, ServerView.LATEST, ServerView.LIBRARIES -> currentView
+            ServerView.RESUME, ServerView.NEXT_UP, ServerView.COLLECTIONS -> ServerView.LIBRARIES
+        }
+        showServerView(targetView, trimmed)
+    }
+    fun clearServerSearch() {
+        val restoreView = preSearchServerView ?: state.value.serverView
+        preSearchServerView = null
+        showServerView(restoreView, "")
+    }
     fun showServerView(view: ServerView, search: String = "") {
         if(provider !is MediaServerProvider || state.value.playing!=null)return
+        if(search.isBlank()) preSearchServerView = null
         serverHomeJob?.cancel()
         val previous=browseJob
         previous?.cancel()
@@ -268,16 +308,28 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
             finally {if(state.value.connection?.id==item.id.sourceId)mutable.update {it.copy(userActionBusy=false)}}
         }
     }
+    private suspend fun loadWall(c: SourceConnection, series: String? = null) {
+        uiPreferences.edit().putBoolean("catalog:${c.id}",true).apply()
+        val filter = if(state.value.wall) state.value.catalogFilter else CatalogFilter()
+        val (catalog, items, recentList) = withContext(Dispatchers.IO) {
+            val all = library.items(c.id)
+            val recentItems = library.recent(c.id)
+            withContext(Dispatchers.Default) {
+                val cat = LibraryCatalog.entries(all)
+                val filtered = if(series!=null) LibraryCatalog.episodes(all,series) else LibraryCatalog.filter(cat,filter)
+                Triple(cat, filtered, recentItems)
+            }
+        }
+        if(state.value.connection?.id != c.id) return
+        mutable.update { it.copy(wall=true,parent=null,catalogItems=catalog,catalogFilter=filter,items=items,recent=recentList,nextOffset=null,selected=null,series=series,busy=false,error=null) }
+    }
     fun showWall(series: String? = null) {
         val c = state.value.connection ?: return
         if(c.kind != SourceKind.WEBDAV) return
         browseJob?.cancel()
-        uiPreferences.edit().putBoolean("catalog:${c.id}",true).apply()
-        val all = library.items(c.id)
-        val catalog = LibraryCatalog.entries(all)
-        val filter = if(state.value.wall) state.value.catalogFilter else CatalogFilter()
-        val items = if(series!=null) LibraryCatalog.episodes(all,series) else LibraryCatalog.filter(catalog,filter)
-        mutable.update { it.copy(wall=true,parent=null,catalogItems=catalog,catalogFilter=filter,items=items,recent=library.recent(c.id),nextOffset=null,selected=null,series=series,busy=false,error=null) }
+        browseJob = viewModelScope.launch {
+            loadWall(c, series)
+        }
     }
     fun filterCatalog(filter: CatalogFilter) {
         if(!state.value.wall || state.value.series!=null)return
@@ -311,7 +363,7 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
                 val metadata = if(state.value.tmdbEnabled) TmdbProvider(metadataClient, secrets.read("tmdb:token").orEmpty()) else null
                 scanner.scan(dav, metadata,traffic)
                 if(state.value.connection?.id==id) {
-                    if(state.value.wall) withContext(Dispatchers.Main) { showWall(state.value.series) }
+                    if(state.value.wall) loadWall(dav.connection, state.value.series)
                     scanner.state.value.pausedReason?.let {message->mutable.update {it.copy(warning=message)}}
                 }
             }
@@ -323,17 +375,25 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     private var lastCompatible=false
     fun retryPlayback(compatible: Boolean = lastCompatible) {
         val item=state.value.playing ?: state.value.failedItem ?: return
-        val resume=if(state.value.playing!=null)engine.state.value.positionMs else library.position(item.id)
+        val resume=if(state.value.playing!=null) {
+            engine.state.value.positionMs.takeIf { it > 0 || engine.state.value.ready } ?: library.position(item.id)
+        } else library.position(item.id)
+        engine.preserveStateFor(item.id)
         play(item,compatible,resume)
     }
     fun play(item: MediaItem, compatible: Boolean = false, resumeOverride: Long? = null) {
         if(playJob?.isActive == true) return
         val source = provider ?: return
+        if(state.value.playing?.id == item.id || state.value.failedItem?.id == item.id) {
+            engine.preserveStateFor(item.id)
+        }
         lastCompatible=compatible
         playJob = viewModelScope.launch {
             mutable.update { it.copy(busy = true, error = null, warning = null,failedItem=null,failureKind=null) }
             try {
-                val fresh = if(source is WebDavProvider) item.copy(resumeMs = library.position(item.id)) else source.details(item.id)
+                val fresh = withContext(Dispatchers.IO) {
+                    if(source is WebDavProvider) item.copy(resumeMs = library.position(item.id)) else source.details(item.id)
+                }
                 coordinator.open(source, PlaybackRequest(if(resumeOverride!=null)fresh.copy(resumeMs=resumeOverride) else fresh, DeviceCapabilities.profile(), compatible))
                 mutable.update { it.copy(playing = fresh, selected = null) }
             } catch(e: CancellationException) { throw e }
@@ -345,7 +405,9 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
         playJob?.cancel()
         playJob = viewModelScope.launch {
             captureFrame?.invoke()
-            coordinator.stop(); engine.release(); mutable.update { it.copy(playing = null, busy = false, recent = it.connection?.id?.let(library::recent).orEmpty()) }
+            coordinator.stop(); engine.release()
+            val recentList = withContext(Dispatchers.IO) { state.value.connection?.id?.let(library::recent).orEmpty() }
+            mutable.update { it.copy(playing = null, busy = false, recent = recentList) }
             refreshServerHome()
         }
     }
@@ -381,7 +443,7 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     override fun onCleared() {
         scanJob?.cancel(); browseJob?.cancel(); playJob?.cancel();userActionJob?.cancel();serverHomeJob?.cancel()
         cleanupScope.launch {
-            coordinator.stop(); engine.release(); provider?.close(); baseClient.close(); driver.close(); cleanupScope.cancel()
+            coordinator.stop(); engine.release(); thumbnails.close(); provider?.close(); baseClient.close(); driver.close(); cleanupScope.cancel()
         }
     }
 }

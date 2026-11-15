@@ -54,9 +54,7 @@ import androidx.compose.ui.semantics.contentDescription
         } else lastLibraryTap=-1L
         tab=route
     }
-    val context=androidx.compose.ui.platform.LocalContext.current
-    val loader=remember(state.connection) {sourceImages(context,state.connection,model.secrets)}
-    DisposableEffect(loader){onDispose{loader.shutdown()}}
+    val loader=rememberSourceImageLoader(state.connection,model.secrets)
     fun addSource() { sourceSheet=false;editingId=null; editor=true; model.clearMessage() }
     fun editSource(c:SourceConnection) { sourceSheet=false;editingId=c.id; editor=true; model.clearMessage() }
     MobileCinemaTheme {
@@ -93,6 +91,9 @@ import androidx.compose.ui.semantics.contentDescription
                                 }
                                 if(tab!="设置")IconButton(onClick=::addSource){Icon(Icons.Rounded.Add,"添加来源")}
                             }
+                        }
+                        if(!editor && state.connection?.baseUrl?.startsWith("http://",true)==true) {
+                            Text("HTTP · 未加密",Modifier.padding(horizontal=if(wide)32.dp else 20.dp,vertical=2.dp),color=androidx.compose.ui.graphics.Color(0xFFFFB74D),fontSize=11.sp)
                         }
                         if(!editor && tab=="媒体库" && state.connection?.kind==SourceKind.WEBDAV) {
                             WebDavModeSwitcher(model,state.wall,state.busy,wide) { wall ->
@@ -151,7 +152,16 @@ import androidx.compose.ui.semantics.contentDescription
                 Row(Modifier.fillMaxWidth().padding(8.dp),verticalAlignment=Alignment.CenterVertically) {
                     Row(Modifier.weight(1f).clickable(enabled=!state.busy){onSelect(c)}.padding(10.dp),verticalAlignment=Alignment.CenterVertically) {
                         Icon(Icons.Rounded.Dns,null,tint=MobileStyle.Accent);Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {Text(c.name);if(state.drafts.any{it.id==c.id})Text(if(model.hasActiveConnection(c.id))"修改待验证 · 原配置保留" else "待验证草稿",color=MobileStyle.Accent,fontSize=11.sp);Text(c.kind.name,color=MobileStyle.Muted,fontSize=11.sp);Text(c.baseUrl,color=MobileStyle.Muted,fontSize=11.sp,maxLines=2,overflow=TextOverflow.Ellipsis)}
+                        Column(Modifier.weight(1f)) {
+                            Text(c.name)
+                            if(state.drafts.any{it.id==c.id})Text(if(model.hasActiveConnection(c.id))"修改待验证 · 原配置保留" else "待验证草稿",color=MobileStyle.Accent,fontSize=11.sp)
+                            Row(horizontalArrangement=Arrangement.spacedBy(6.dp),verticalAlignment=Alignment.CenterVertically) {
+                                Text(c.kind.name,color=MobileStyle.Muted,fontSize=11.sp)
+                                val http=c.baseUrl.startsWith("http://",true)
+                                Text(if(http)"HTTP 未加密" else "HTTPS",color=if(http)androidx.compose.ui.graphics.Color(0xFFFFB74D) else MobileStyle.Accent,fontSize=11.sp)
+                            }
+                            Text(c.baseUrl,color=MobileStyle.Muted,fontSize=11.sp,maxLines=2,overflow=TextOverflow.Ellipsis)
+                        }
                         if(state.connection?.id==c.id)Icon(Icons.Rounded.CheckCircle,"当前来源",tint=MobileStyle.Accent,modifier=Modifier.size(19.dp))
                     }
                     IconButton(onClick={onEdit(c)},enabled=!state.busy){Icon(Icons.Rounded.Edit,"编辑 ${c.name}")}

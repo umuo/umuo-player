@@ -11,6 +11,8 @@ import io.ktor.client.*
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 val videoExtensions = setOf("mp4", "mkv", "m4v", "avi", "mov", "ts", "m2ts", "webm")
 data class DavEntry(val url: String, val name: String, val directory: Boolean, val fingerprint: String) {
@@ -44,8 +46,10 @@ class WebDavProvider(
         val xml = transport.request(directory, HttpMethod("PROPFIND"),
             """<d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/><d:getetag/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>""",
             mapOf("Depth" to "1", "Content-Type" to "application/xml; charset=utf-8")).bodyAsText()
-        return parseListing(xml, directory).filter { entry ->
-            runCatching { validate(entry.url) }.isSuccess && entry.url.trimEnd('/') != directory.trimEnd('/')
+        return withContext(Dispatchers.Default) {
+            parseListing(xml, directory).filter { entry ->
+                runCatching { validate(entry.url) }.isSuccess && entry.url.trimEnd('/') != directory.trimEnd('/')
+            }
         }
     }
     internal fun parseListing(xml: String, directory: String): List<DavEntry> {
@@ -89,7 +93,7 @@ class WebDavProvider(
         val seekable=probe.seekable
         val stem = Url(url).encodedPath.substringAfterLast('/').substringBeforeLast('.').decodeURLPart()
         val subtitles = listEntries(url.substringBeforeLast('/') + "/").filter {
-            !it.directory && it.extension in setOf("srt", "vtt", "ass", "ssa") &&
+            !it.directory && it.extension in setOf("srt", "vtt", "ass", "ssa", "ttml", "dfxp") &&
                 (it.name.substringBeforeLast('.') == stem || it.name.startsWith("$stem.", true))
         }.map { Subtitle(it.url, it.name, it.url, subtitleMime(it.extension)) }
         return PlaybackPlan(request.item, probe.uri, credentialKey = connection.id, subtitles = subtitles,

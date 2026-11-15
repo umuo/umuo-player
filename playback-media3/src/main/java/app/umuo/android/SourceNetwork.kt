@@ -6,16 +6,33 @@ import app.umuo.core.network.MEDIA_USER_AGENT
 import okhttp3.*
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class UnsafeMediaRedirect : java.io.IOException("HTTPS downgrade rejected")
 
+fun OkHttpClient.shutdownCleanly() {
+    dispatcher.cancelAll()
+    connectionPool.evictAll()
+    dispatcher.executorService.shutdown()
+}
+
 /** 同源才附加凭据；OkHttp 重定向不会将自定义 token 泄露给另一个站点。 */
-fun sourceHttp(connection: SourceConnection, secrets: CredentialStore): OkHttpClient {
+fun sourceHttp(connection: SourceConnection, secrets: CredentialStore, forPlayback: Boolean = false): OkHttpClient {
     val count = AtomicInteger()
+    val dispatcher = Dispatcher().apply {
+        maxRequests = if (forPlayback) 64 else 32
+        maxRequestsPerHost = if (forPlayback) 12 else 8
+    }
     return OkHttpClient.Builder()
-        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+        .dispatcher(dispatcher)
+        .connectionPool(
+            if (forPlayback) ConnectionPool(8, 5, TimeUnit.MINUTES)
+            else ConnectionPool(5, 5, TimeUnit.MINUTES)
+        )
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(if (forPlayback) 60L else 30L, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .addInterceptor { chain ->
             chain.proceed(chain.request().newBuilder().header("User-Agent", MEDIA_USER_AGENT).build())
         }

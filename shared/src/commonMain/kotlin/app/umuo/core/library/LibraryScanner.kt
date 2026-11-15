@@ -20,6 +20,7 @@ class LibraryScanner(private val repository: LibraryRepository) {
         if (repository.pending(id).isEmpty()) repository.enqueue(id, source.connection.baseUrl)
         mutable.value = ScanState(running = true)
         val attempted = mutableSetOf<String>()
+        val seriesByPath = repository.items(id).filter { it.kind == MediaKind.SERIES }.associateBy { it.path }.toMutableMap()
         try {
             while (true) {
                 currentCoroutineContext().ensureActive()
@@ -38,10 +39,13 @@ class LibraryScanner(private val repository: LibraryRepository) {
                         NfoParser.apply(MediaItem(MediaId(id,"series:$directory"),"",MediaKind.SERIES,path=directory),source.readText(showNfo.url))
                             .copy(seriesKey=directory,artwork=poster?.url,backdrop=backdrop?.url,
                                 fingerprint=listOf(showNfo.fingerprint,poster?.fingerprint,backdrop?.fingerprint).joinToString("|"))
-                            .also {repository.upsert(it,directory)}
-                    } else repository.items(id).filter {
-                        it.kind==MediaKind.SERIES && it.path!=directory && directory.startsWith(it.path.trimEnd('/')+"/")
-                    }.maxByOrNull {it.path.length}
+                            .also {repository.upsert(it,directory); seriesByPath[directory] = it}
+                    } else {
+                        seriesByPath.remove(directory)
+                        seriesByPath.values.filter {
+                            it.path!=directory && directory.startsWith(it.path.trimEnd('/')+"/")
+                        }.maxByOrNull {it.path.length}
+                    }
                     for(entry in videos) {
                         val raw = source.item(entry)
                         val old = repository.indexed(raw.id)

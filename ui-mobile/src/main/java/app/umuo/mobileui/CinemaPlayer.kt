@@ -65,14 +65,16 @@ import kotlinx.coroutines.delay
             if(originalBrightness!=null)activity?.window?.let { window -> window.attributes=window.attributes.apply {screenBrightness=originalBrightness} }
         }
     }
-    LaunchedEffect(controls,state.playing,panel,feedbackVersion,dragging!=null) {
-        if(controls && state.playing && panel==null && dragging==null){delay(5_000);controls=false}
+    val activeError = state.error ?: browser.error
+    val activeKind = state.failureKind ?: browser.failureKind
+    LaunchedEffect(controls,state.playing,panel,feedbackVersion,dragging!=null,activeError) {
+        if(controls && state.playing && panel==null && dragging==null && activeError==null){delay(5_000);controls=false}
     }
     LaunchedEffect(locked,unlockVisible,feedbackVersion) {if(locked && unlockVisible){delay(4_000);unlockVisible=false}}
-    LaunchedEffect(state.error){if(state.error!=null){locked=false;controls=true}}
+    LaunchedEffect(activeError){if(activeError!=null){locked=false;controls=true}}
     BackHandler {when {locked->{unlockVisible=true;showFeedback(GestureFeedback("已锁定，请先解锁"))};panel!=null->panel=null;else->model.stop()}}
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        PlayerSurface(model,Modifier.fillMaxSize(),onSingleTap={if(locked)unlockVisible=!unlockVisible else controls=!controls},onFeedback={showFeedback(it)},gesturesLocked=locked)
+        PlayerSurface(model,Modifier.fillMaxSize(),onSingleTap={if(locked)unlockVisible=!unlockVisible else if(activeError==null)controls=!controls else controls=true},onFeedback={showFeedback(it)},gesturesLocked=locked)
         if(state.buffering)CircularProgressIndicator(Modifier.align(Alignment.Center).size(36.dp),color=MobileStyle.Accent,strokeWidth=2.dp)
         AnimatedVisibility(visible=controls && !locked,enter=fadeIn(),exit=fadeOut()) {
             Box(Modifier.fillMaxSize()) {
@@ -81,7 +83,8 @@ import kotlinx.coroutines.delay
                     IconButton(onClick=model::stop){Icon(Icons.AutoMirrored.Rounded.ArrowBack,"结束播放",tint=Color.White)}
                     Column(Modifier.weight(1f).padding(start=8.dp)) {
                         Text(browser.playing?.title.orEmpty(),color=Color.White,fontSize=16.sp,fontWeight=FontWeight.Medium,maxLines=1,overflow=TextOverflow.Ellipsis)
-                        Text(browser.connection?.name.orEmpty(),color=Color.White.copy(alpha=.5f),fontSize=10.sp,modifier=Modifier.padding(top=3.dp))
+                        val httpWarning = if (browser.connection?.baseUrl?.startsWith("http://", true) == true) " · HTTP 未加密" else ""
+                        Text(browser.connection?.name.orEmpty() + httpWarning,color=Color.White.copy(alpha=if (httpWarning.isNotEmpty()) .75f else .5f),fontSize=10.sp,modifier=Modifier.padding(top=3.dp))
                     }
                     IconButton(onClick={panel="手势设置"}){Icon(Icons.Rounded.Tune,"手势设置",tint=Color.White)}
                     IconButton(onClick={panel="诊断"}){Icon(Icons.Rounded.MoreHoriz,"播放诊断",tint=Color.White)}
@@ -97,7 +100,7 @@ import kotlinx.coroutines.delay
                 }
                 Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.92f))))
                     .navigationBarsPadding().padding(start=24.dp,end=24.dp,top=28.dp,bottom=12.dp)) {
-                    state.error?.let {PlaybackRecovery(it,state.failureKind,browser.connection?.kind!=app.umuo.core.model.SourceKind.WEBDAV,browser.busy,{model.retryPlayback()},{model.retryPlayback(true)},onEditConnection)}
+                    activeError?.let {PlaybackRecovery(it,activeKind,browser.connection?.kind!=app.umuo.core.model.SourceKind.WEBDAV,browser.busy,{model.retryPlayback()},{model.retryPlayback(true)},onEditConnection)}
                     if(!state.seekable)Text("此资源仅支持顺序播放",color=MobileStyle.Muted,fontSize=11.sp)
                     Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
                         Text(timeLabel((dragging?.toLong() ?: state.positionMs)),fontSize=11.sp,color=Color.White)

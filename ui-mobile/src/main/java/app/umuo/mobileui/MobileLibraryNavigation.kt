@@ -99,15 +99,15 @@ import app.umuo.core.source.mediaserver.ServerView
                 query, { query = it }, label = { Text("搜索当前服务器") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = horizontalPadding).padding(bottom = 10.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); navigate { model.showServerView(ServerView.LIBRARIES, query) } }),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); navigate { model.searchServer(query) } }),
                 trailingIcon = {
                     Row {
-                        IconButton(onClick = { keyboard?.hide(); navigate { model.showServerView(ServerView.LIBRARIES, query) } }, enabled = !state.busy) {
+                        IconButton(onClick = { keyboard?.hide(); navigate { model.searchServer(query) } }, enabled = !state.busy) {
                             Icon(Icons.Rounded.Search, "搜索影视")
                         }
                         IconButton(onClick = {
                             keyboard?.hide(); query = ""; searching = false
-                            if (state.serverSearch.isNotBlank()) navigate { model.showServerView(state.serverView) }
+                            if (state.serverSearch.isNotBlank()) navigate { model.clearServerSearch() }
                         }) { Icon(Icons.Rounded.Close, "清除搜索") }
                     }
                 }

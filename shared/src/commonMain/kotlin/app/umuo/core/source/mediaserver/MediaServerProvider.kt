@@ -169,7 +169,8 @@ abstract class MediaServerProvider(
 fun subtitleMime(codec: String): String = when (codec.lowercase()) {
     "srt", "subrip" -> "application/x-subrip"
     "ass", "ssa" -> "text/x-ssa"
-    "ttml" -> "application/ttml+xml"
+    "ttml", "dfxp" -> "application/ttml+xml"
+    "vtt", "webvtt" -> "text/vtt"
     else -> "text/vtt"
 }
 class JellyfinProvider(c: SourceConnection, client: HttpClient, secrets: CredentialStore) : MediaServerProvider(c, client, secrets) {

@@ -23,8 +23,19 @@ class VideoThumbnails(context: Context, private val connection: (String) -> Sour
     private val directory = File(context.cacheDir, "video-previews").apply { mkdirs() }
     private val extraction = Mutex()
     private val attempted = mutableSetOf<String>()
+    private val clients = mutableMapOf<String, OkHttpClient>()
     private val mutableRevision = MutableStateFlow(0L)
     val revision = mutableRevision.asStateFlow()
+    @Synchronized private fun clientFor(c: SourceConnection): OkHttpClient {
+        val identity = "${c.id}\u0000${c.kind}\u0000${c.baseUrl}\u0000${c.username}"
+        return clients.getOrPut(identity) {
+            sourceHttp(c, secrets).newBuilder().callTimeout(4, TimeUnit.SECONDS).build()
+        }
+    }
+    @Synchronized fun close() {
+        clients.values.forEach { it.shutdownCleanly() }
+        clients.clear()
+    }
     private fun key(item: MediaItem): String = MessageDigest.getInstance("SHA-256")
         .digest("${item.id.sourceId}\u0000${connection(item.id.sourceId)?.let { "${it.kind}:${it.baseUrl}:${it.username}" }}\u0000${item.id.value}\u0000${item.fingerprint}".toByteArray())
         .joinToString("") { "%02x".format(it.toInt() and 255) }
@@ -46,7 +57,7 @@ class VideoThumbnails(context: Context, private val connection: (String) -> Sour
             val target = file(item, false)
             // 服务端影片已经提供图片；WebDAV 文件才做按需、本地提帧。
             if(c.kind != SourceKind.WEBDAV || item.isFolder || !attempted.add(key(item))) return@withLock null
-            val http = sourceHttp(c, secrets).newBuilder().callTimeout(4, TimeUnit.SECONDS).build()
+            val http = clientFor(c)
             val job=currentCoroutineContext()[Job]
             try {
                 RangeMediaDataSource(http, item.path) {job?.isActive == false}.use { source ->

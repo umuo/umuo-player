@@ -98,4 +98,36 @@ class LibraryTest {
     @Test fun gestureCancellationRestoresOriginalSpeed() {
         val g=GestureMachine();g.down(1.25f);assertTrue(g.hold());assertEquals(1.25f,g.release());assertEquals(GestureMachine.Mode.IDLE,g.mode);assertNull(g.release())
     }
+    @Test fun batchItemsAndRecentMergeOverridesAccurately() {
+        val (r,driver)=repository()
+        try {
+            val a=SourceConnection("a","DAV A",SourceKind.WEBDAV,"https://a.test/")
+            val b=SourceConnection("b","DAV B",SourceKind.WEBDAV,"https://b.test/")
+            r.saveConnection(a);r.saveConnection(b)
+            val m1=MediaItem(MediaId("a","1"),"Raw One")
+            val m2=MediaItem(MediaId("a","2"),"Raw Two")
+            val m3=MediaItem(MediaId("a","3"),"Raw Three")
+            val m4=MediaItem(MediaId("b","1"),"Other Raw")
+            val count=r.transactionWithResult {
+                r.upsert(m1,"/");r.upsert(m2,"/");r.upsert(m3,"/");r.upsert(m4,"/")
+                r.match(m1,m1.copy(title="Matched One",metadataId="tmdb:10"))
+                r.match(m2,null)
+                r.match(m4,m4.copy(title="Other Matched",metadataId="tmdb:99"))
+                r.savePosition(m1.id,1000);r.savePosition(m2.id,2000)
+                3
+            }
+            assertEquals(3,count)
+            val items=r.items("a").associateBy {it.id.value}
+            assertEquals("Matched One",items["1"]?.title)
+            assertEquals("tmdb:10",items["1"]?.metadataId)
+            assertEquals("Raw Two",items["2"]?.title)
+            assertFalse(r.automaticMatchAllowed(m2.id))
+            assertEquals("Raw Three",items["3"]?.title)
+            val recent=r.recent("a").associateBy {it.id.value}
+            assertEquals(setOf("1","2"),recent.keys)
+            assertEquals("Matched One",recent["1"]?.title)
+            assertEquals("Raw Two",recent["2"]?.title)
+            assertEquals("Other Matched",r.items("b").single().title)
+        }finally{driver.close()}
+    }
 }

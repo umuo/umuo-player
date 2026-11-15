@@ -6,21 +6,27 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.concurrent.Volatile
+
+internal fun isUserPaused(state: PlaybackState): Boolean =
+    state.paused || (!state.playing && !state.buffering && !state.ended)
 
 /** 单个播放会话；START/PROGRESS/STOP 串行上报，停止失败不触发重复计数重试。 */
 class PlaybackCoordinator(
     private val engine: PlaybackEngine, private val library: LibraryRepository,
     private val scope: CoroutineScope, private val warning: (String) -> Unit
 ) {
-    private var plan: PlaybackPlan? = null
+    @Volatile private var plan: PlaybackPlan? = null
     private var provider: MediaSourceProvider? = null
+    private var lastRequest: PlaybackRequest? = null
     private var monitor: Job? = null
     private var started = false
+    private var everReady = false
     private val lock = Mutex()
     suspend fun open(source: MediaSourceProvider, request: PlaybackRequest): PlaybackPlan = lock.withLock {
         stopCurrent()
         val resolved = source.resolve(request)
-        provider = source; plan = resolved; started = false
+        provider = source; plan = resolved; lastRequest = request; started = false; everReady = false
         engine.prepare(resolved)
         monitor = scope.launch {
             var ticks = 0
@@ -30,30 +36,51 @@ class PlaybackCoordinator(
             while (isActive) {
                 delay(500)
                 val state = engine.state.value
-                if (state.ready) {
-                    if(state.durationMs > 0 && state.durationMs != savedDuration) {
-                        library.saveDuration(resolved.item.id, state.durationMs); savedDuration = state.durationMs
+                val currentPlan = plan ?: resolved
+                if (state.ready) everReady = true
+                val activeSession = (state.ready || everReady) && state.error == null
+                val paused = isUserPaused(state)
+                if (activeSession) {
+                    if (state.durationMs > 0 && state.durationMs != savedDuration) {
+                        library.saveDuration(currentPlan.item.id, state.durationMs); savedDuration = state.durationMs
                     }
-                    if(lastSavedPosition < 0 || kotlin.math.abs(state.positionMs - lastSavedPosition) >= 1_000 || lastPaused != !state.playing || state.ended) {
-                        library.savePosition(resolved.item.id, if (state.ended) 0 else state.positionMs)
+                    if (lastSavedPosition < 0 || kotlin.math.abs(state.positionMs - lastSavedPosition) >= 1_000 || lastPaused != paused || state.ended) {
+                        library.savePosition(currentPlan.item.id, if (state.ended) 0 else state.positionMs)
                         lastSavedPosition = state.positionMs
                     }
                     if (!started && state.playing) {
                         started = true
-                        report(source, resolved, PlaybackEventKind.START, state)
-                    } else if (started && (++ticks >= 20 || lastPaused != !state.playing)) {
+                        report(source, currentPlan, PlaybackEventKind.START, state, paused)
+                    } else if (started && (++ticks >= 20 || lastPaused != paused)) {
                         ticks = 0
-                        report(source, resolved, PlaybackEventKind.PROGRESS, state)
+                        report(source, currentPlan, PlaybackEventKind.PROGRESS, state, paused)
                     }
-                    lastPaused = !state.playing
+                    lastPaused = paused
                 }
                 if (state.ended || state.error != null) break
             }
         }
         resolved
     }
-    private suspend fun report(source: MediaSourceProvider, current: PlaybackPlan, kind: PlaybackEventKind, state: PlaybackState) {
-        try { withTimeout(8_000) { source.report(current, PlaybackEvent(kind, state.positionMs, !state.playing, state.ended)) } }
+    /** 仅在会话内原位刷新临时播放地址或转码会话，不重复触发 START/STOP 计数。 */
+    suspend fun refreshPlan(positionMs: Long): PlaybackPlan? = lock.withLock {
+        val current = plan ?: return@withLock null
+        val source = provider ?: return@withLock null
+        val req = lastRequest ?: return@withLock null
+        val refreshed = source.resolve(req.copy(item = current.item.copy(resumeMs = positionMs.coerceAtLeast(0))))
+        if (current.sessionId != null && current.sessionId != refreshed.sessionId) {
+            try { withTimeout(5_000) { source.closeSession(current) } }
+            catch (e: CancellationException) { if (e !is TimeoutCancellationException) throw e }
+            catch (_: Exception) { }
+        }
+        plan = refreshed
+        refreshed
+    }
+    private suspend fun report(
+        source: MediaSourceProvider, current: PlaybackPlan, kind: PlaybackEventKind,
+        state: PlaybackState, paused: Boolean = isUserPaused(state)
+    ) {
+        try { withTimeout(8_000) { source.report(current, PlaybackEvent(kind, state.positionMs, paused, state.ended)) } }
         catch (e: CancellationException) { if (e !is TimeoutCancellationException) throw e; warning("服务器进度上报超时，本地记录已保留") }
         catch (_: Exception) { warning("服务器进度上报失败，本地记录已保留") }
     }
@@ -62,14 +89,17 @@ class PlaybackCoordinator(
         val current = plan ?: return
         val source = provider ?: return
         val state = engine.state.value
+        val paused = isUserPaused(state)
         engine.pause()
-        if (state.ready) library.savePosition(current.item.id, if(state.ended) 0 else state.positionMs)
+        if ((state.ready || everReady || started) && state.error == null) {
+            library.savePosition(current.item.id, if (state.ended) 0 else state.positionMs)
+        }
         withContext(NonCancellable) {
-            if (started) report(source, current, PlaybackEventKind.STOP, state)
+            if (started) report(source, current, PlaybackEventKind.STOP, state, paused)
             try { withTimeout(8_000) { source.closeSession(current) } }
             catch (_: Exception) { warning("服务器播放会话释放失败，请检查连接") }
         }
-        plan = null; provider = null; started = false
+        plan = null; provider = null; lastRequest = null; started = false; everReady = false
     }
     suspend fun stop() = lock.withLock { stopCurrent() }
 }

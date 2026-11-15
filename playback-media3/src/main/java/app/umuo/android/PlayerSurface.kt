@@ -26,14 +26,38 @@ data class GestureFeedback(val text: String, val progress: Float? = null, val si
     val currentPlayer by model.engine.players.collectAsState()
     val settings by model.playbackPreferences.state.collectAsState()
     key(playing.playing?.id) {
+        var containerRef by remember { mutableStateOf<android.widget.FrameLayout?>(null) }
+        fun updateVideoBounds(container: android.widget.FrameLayout?, fallback: android.graphics.Rect) {
+            val surface = (container?.getChildAt(0) as? PlayerView)?.videoSurfaceView
+            if (surface != null && surface.width > 0 && surface.height > 0 && surface.isAttachedToWindow) {
+                val loc = IntArray(2)
+                surface.getLocationInWindow(loc)
+                if (loc[0] >= 0 && loc[1] >= 0) {
+                    model.videoBounds = android.graphics.Rect(loc[0], loc[1], loc[0] + surface.width, loc[1] + surface.height)
+                    return
+                }
+            }
+            model.videoBounds = fallback
+        }
         AndroidView(modifier = modifier.onGloballyPositioned { coordinates ->
             val bounds = coordinates.boundsInWindow()
-            model.videoBounds = android.graphics.Rect(bounds.left.toInt(), bounds.top.toInt(), bounds.right.toInt(), bounds.bottom.toInt())
+            val fallback = android.graphics.Rect(bounds.left.toInt(), bounds.top.toInt(), bounds.right.toInt(), bounds.bottom.toInt())
+            updateVideoBounds(containerRef, fallback)
         }, factory = { context ->
             android.widget.FrameLayout(context).apply {
-                addView(PlayerView(context).apply { player = currentPlayer; useController = false; keepScreenOn = true
-                    subtitleView?.applyCinemaAppearance() },
-                    android.widget.FrameLayout.LayoutParams(-1, -1))
+                containerRef = this
+                val pv = PlayerView(context).apply { player = currentPlayer; useController = false; keepScreenOn = true
+                    subtitleView?.applyCinemaAppearance() }
+                addView(pv, android.widget.FrameLayout.LayoutParams(-1, -1))
+                pv.videoSurfaceView?.addOnLayoutChangeListener { v, _, _, _, _, _, _, _, _ ->
+                    if (v.width > 0 && v.height > 0 && v.isAttachedToWindow) {
+                        val loc = IntArray(2)
+                        v.getLocationInWindow(loc)
+                        if (loc[0] >= 0 && loc[1] >= 0) {
+                            model.videoBounds = android.graphics.Rect(loc[0], loc[1], loc[0] + v.width, loc[1] + v.height)
+                        }
+                    }
+                }
                 if(touch) addView(GestureOverlay(context, model.engine, onSingleTap, onFeedback,settings,gesturesLocked), android.widget.FrameLayout.LayoutParams(-1, -1))
                 model.captureFrame = capture@{
                     val item = model.state.value.playing ?: return@capture
@@ -52,15 +76,20 @@ data class GestureFeedback(val text: String, val progress: Float? = null, val si
         }, update = { frame -> (frame.getChildAt(0) as PlayerView).player = currentPlayer
             (frame.getChildAt(1) as? GestureOverlay)?.apply { this.onSingleTap = onSingleTap; this.onFeedback = onFeedback; this.settings=settings; this.locked=gesturesLocked }
         },
-            onRelease = { frame -> model.captureFrame = null; (frame.getChildAt(0) as PlayerView).player = null })
-        LaunchedEffect(playing.playing?.id) { while(isActive) { delay(15_000); model.captureFrame?.invoke() } }
+            onRelease = { frame -> containerRef = null; model.captureFrame = null; (frame.getChildAt(0) as PlayerView).player = null })
+        LaunchedEffect(playing.playing?.id) { while(isActive) { delay(15_000); if (model.engine.state.value.playing) model.captureFrame?.invoke() } }
     }
 }
 /** 从 Peach 的独立手势状态机迁移；取消、松开和离开页面均恢复长按倍率。 */
 private class GestureOverlay(context: Context, val engine: Media3Engine, var onSingleTap: (() -> Unit)?, var onFeedback: ((GestureFeedback) -> Unit)?, var settings: GestureSettings, lockedInitially: Boolean) : View(context) {
     var locked = lockedInitially
         set(value) {
-            if(value && !field) { handler.removeCallbacksAndMessages(null);gestures.release();engine.restoreBoost();dragged=false;held=false }
+            if(value && !field) {
+                val wasSeeking = gestures.mode == GestureMachine.Mode.SEEK
+                handler.removeCallbacksAndMessages(null);gestures.release();engine.restoreBoost()
+                if(wasSeeking) engine.cancelPreviewSeek()
+                dragged=false;held=false
+            }
             field=value
         }
     private val gestures = GestureMachine()
@@ -107,7 +136,7 @@ private class GestureOverlay(context: Context, val engine: Media3Engine, var onS
                         when(gestures.mode) {
                             GestureMachine.Mode.SEEK -> {
                                 val target=(position+dx/width.coerceAtLeast(1)*120_000).toLong().coerceIn(0,engine.state.value.durationMs.coerceAtLeast(0))
-                                engine.seekTo(target)
+                                engine.previewSeek(target)
                                 val delta=(target-position)/1000
                                 onFeedback?.invoke(GestureFeedback("${if(delta>=0) "+" else ""}${delta}s · ${timeLabel(target)}"))
                             }
@@ -129,11 +158,23 @@ private class GestureOverlay(context: Context, val engine: Media3Engine, var onS
                     }
                 }
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { handler.removeCallbacks(hold); gestures.release(); engine.restoreBoost() }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                val wasSeeking = gestures.mode == GestureMachine.Mode.SEEK
+                handler.removeCallbacks(hold); gestures.release(); engine.restoreBoost()
+                if(wasSeeking) {
+                    if(e.actionMasked == MotionEvent.ACTION_UP) engine.commitPreviewSeek()
+                    else engine.cancelPreviewSeek()
+                }
+            }
         }
         if(!dragged && !held) detector.onTouchEvent(e)
         return true
     }
     override fun performClick(): Boolean { super.performClick(); onSingleTap?.invoke() ?: run { engine.toggle() }; return true }
-    override fun onDetachedFromWindow() { handler.removeCallbacksAndMessages(null); gestures.release(); engine.restoreBoost(); super.onDetachedFromWindow() }
+    override fun onDetachedFromWindow() {
+        val wasSeeking = gestures.mode == GestureMachine.Mode.SEEK
+        handler.removeCallbacksAndMessages(null); gestures.release(); engine.restoreBoost()
+        if(wasSeeking) engine.cancelPreviewSeek()
+        super.onDetachedFromWindow()
+    }
 }

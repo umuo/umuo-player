@@ -23,12 +23,12 @@ internal fun TvServerSearch(model: PlayerModel, state: BrowserState) {
     BackHandler(enabled = fieldFocused || query.isNotBlank()) {
         keyboard?.hide()
         query = ""
-        if (state.serverSearch.isNotBlank()) model.showServerView(state.serverView)
+        if (state.serverSearch.isNotBlank()) model.clearServerSearch()
         focus.moveFocus(FocusDirection.Up)
     }
     Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
         TvTextField(query,{query=it},"搜索当前服务器",Modifier.width(400.dp).onFocusChanged {fieldFocused=it.hasFocus})
-        Button(enabled=!state.busy,onClick={keyboard?.hide();model.showServerView(app.umuo.core.source.mediaserver.ServerView.LIBRARIES,query)}) {Text("搜索影视")}
-        if(state.serverSearch.isNotBlank())Button(onClick={model.showServerView(state.serverView)}) {Text("清除搜索")}
+        Button(enabled=!state.busy,onClick={keyboard?.hide();model.searchServer(query)}) {Text("搜索影视")}
+        if(state.serverSearch.isNotBlank())Button(onClick={query="";model.clearServerSearch()}) {Text("清除搜索")}
     }
 }

@@ -59,9 +59,7 @@ import kotlinx.coroutines.delay
             lastFocused?.let { key -> runCatching { requesters[key]?.requestFocus() } }
         }
     }
-    val context=androidx.compose.ui.platform.LocalContext.current
-    val loader=remember(state.connection){sourceImages(context,state.connection,model.secrets)}
-    DisposableEffect(loader){onDispose{loader.shutdown()}}
+    val loader=rememberSourceImageLoader(state.connection,model.secrets)
     CinemaTheme { MaterialTheme(colorScheme=darkColorScheme(primary=Cinema.Accent,onPrimary=Cinema.Background,background=Cinema.Background,surface=Cinema.Surface,onSurface=Cinema.Text,secondaryContainer=Cinema.Elevated,onSecondaryContainer=Cinema.Text)) {
         CompositionLocalProvider(LocalContentColor provides Cinema.Text) {
         Box(Modifier.fillMaxSize().background(Cinema.Background).imePadding()) {
@@ -76,6 +74,7 @@ import kotlinx.coroutines.delay
                     Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(20.dp)) {
                         CinemaWordmark();Spacer(Modifier.width(24.dp))
                         Text("你的私人影院",color=Cinema.Muted,fontSize=12.sp)
+                        if(state.connection?.baseUrl?.startsWith("http://",true)==true)Text("HTTP 未加密",color=Color(0xFFFFB74D),fontSize=11.sp)
                         Spacer(Modifier.weight(1f))
                         Button(onClick={topReturnFocus=addSourceFocus;connect=true},modifier=Modifier.focusRequester(addSourceFocus)){Icon(Icons.Rounded.Add,null,Modifier.size(17.dp));Spacer(Modifier.width(6.dp));Text("添加来源",fontSize=12.sp)}
                         Button(onClick={topReturnFocus=settingsFocus;settings=true},modifier=Modifier.focusRequester(settingsFocus)){Icon(Icons.Rounded.Tune,"设置",Modifier.size(18.dp))}
@@ -190,10 +189,11 @@ import kotlinx.coroutines.delay
 @Composable private fun TvCinemaPlayer(model:PlayerModel) {
     val browser by model.state.collectAsState()
     val state by model.engine.state.collectAsState()
+    val activeError = state.error ?: browser.error
     val videoFocus=remember{FocusRequester()}
     val controlsFocus=remember{FocusRequester()}
     val recoveryFocus=remember{FocusRequester()}
-    LaunchedEffect(state.error){if(state.error!=null)recoveryFocus.requestFocus() else videoFocus.requestFocus()}
+    LaunchedEffect(activeError){if(activeError!=null)recoveryFocus.requestFocus() else videoFocus.requestFocus()}
     var surfaceFocused by remember{mutableStateOf(false)}
     var controlsVisible by remember{mutableStateOf(false)}
     LaunchedEffect(controlsVisible){if(controlsVisible)controlsFocus.requestFocus()}
@@ -201,19 +201,20 @@ import kotlinx.coroutines.delay
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         Box(Modifier.fillMaxSize().focusRequester(videoFocus).onFocusChanged{surfaceFocused=it.isFocused}.onPreviewKeyEvent {e->
             if(!surfaceFocused || e.type!=KeyEventType.KeyDown)false else when(e.key) {
-                Key.DirectionLeft->{model.engine.seekTo(state.positionMs-10_000);true}
-                Key.DirectionRight->{model.engine.seekTo(state.positionMs+10_000);true}
+                Key.DirectionLeft->{model.engine.seekBy(-10_000);true}
+                Key.DirectionRight->{model.engine.seekBy(10_000);true}
                 Key.Enter,Key.DirectionCenter,Key.MediaPlayPause->{model.engine.toggle();true}
-                Key.DirectionDown->{if(state.error!=null)recoveryFocus.requestFocus() else controlsVisible=true;true}
+                Key.DirectionDown->{if(activeError!=null)recoveryFocus.requestFocus() else controlsVisible=true;true}
                 else->false
             }
         }.focusable()){PlayerSurface(model,Modifier.fillMaxSize(),false)}
         Column(Modifier.align(Alignment.TopStart).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.7f),Color.Transparent))).padding(32.dp)) {
             Text(browser.playing?.title.orEmpty(),fontSize=22.sp,fontWeight=FontWeight.Medium)
-            Text(browser.connection?.name.orEmpty(),fontSize=11.sp,color=Cinema.Muted,modifier=Modifier.padding(top=5.dp))
+            val httpWarning = if (browser.connection?.baseUrl?.startsWith("http://", true) == true) " · HTTP 未加密" else ""
+            Text(browser.connection?.name.orEmpty() + httpWarning,fontSize=11.sp,color=if (httpWarning.isNotEmpty()) Color(0xFFFFB74D) else Cinema.Muted,modifier=Modifier.padding(top=5.dp))
         }
-        if(controlsVisible || !state.playing || state.error!=null)Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.9f)))).padding(32.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-            state.error?.let{
+        if(controlsVisible || !state.playing || activeError!=null)Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.9f)))).padding(32.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+            activeError?.let{
                 Text(it,color=Color(0xFFFFB4AB))
                 Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
                     Button(onClick={model.retryPlayback()},enabled=!browser.busy,modifier=Modifier.focusRequester(recoveryFocus)){Text("重试播放")}
@@ -222,7 +223,7 @@ import kotlinx.coroutines.delay
             }
             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(timeLabel(state.positionMs),fontSize=12.sp);Text(timeLabel(state.durationMs),fontSize=12.sp,color=Cinema.Muted)}
             androidx.compose.material3.LinearProgressIndicator(progress={if(state.durationMs>0)(state.positionMs.toFloat()/state.durationMs).coerceIn(0f,1f) else 0f},modifier=Modifier.fillMaxWidth().height(3.dp),color=Cinema.Accent,trackColor=Color.White.copy(alpha=.2f))
-            LazyRow(horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(5.dp),modifier=Modifier.onPreviewKeyEvent{if(it.type==KeyEventType.KeyDown && it.key==Key.DirectionUp){if(state.error!=null)recoveryFocus.requestFocus() else {videoFocus.requestFocus();controlsVisible=false};true}else false}) {
+            LazyRow(horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(5.dp),modifier=Modifier.onPreviewKeyEvent{if(it.type==KeyEventType.KeyDown && it.key==Key.DirectionUp){if(activeError!=null)recoveryFocus.requestFocus() else {videoFocus.requestFocus();controlsVisible=false};true}else false}) {
                 item{Button(onClick={model.engine.toggle()},modifier=Modifier.focusRequester(controlsFocus)){Icon(when {state.ended->Icons.Rounded.Replay;state.playing->Icons.Rounded.Pause;else->Icons.Rounded.PlayArrow},null,Modifier.size(20.dp));Text(when {state.ended->"重新播放";state.playing->"暂停";else->"播放"})}}
                 item{Button(onClick={model.engine.setSpeed(if(state.speed>=2f)1f else state.speed+.25f)}){Text("${state.speed}×")}}
                 item{Button(onClick={model.engine.selectSubtitle(null)}){Text("关闭字幕")}}

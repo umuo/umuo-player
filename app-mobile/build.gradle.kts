@@ -22,7 +22,12 @@ android {
    keyPassword = providers.environmentVariable("UMUO_KEY_PASSWORD").orNull
   }
  }
- buildTypes.named("release") { signingConfig = releaseSigning }
+ buildTypes.named("release") {
+  signingConfig = releaseSigning
+  isMinifyEnabled = true
+  isShrinkResources = true
+  proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), rootProject.file("proguard-rules.pro"))
+ }
  buildFeatures { compose = true }
  compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
  kotlinOptions { jvmTarget = "17" }
