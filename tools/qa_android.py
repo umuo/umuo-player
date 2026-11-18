@@ -29,10 +29,13 @@ def scroll_down():
 def click(text):
     if a.tv:
         # TV Material 控件按遥控/键盘焦点激活；触摸 tap 不能代替确认键。
-        for _ in range(30):
+        for _ in range(40):
             root=tree()
             focused=next((n for n in root.iter('node') if n.get('focused')=='true'),None)
-            if focused is not None and any(n.get('text','').removeprefix('● ')==text for n in focused.iter('node')):
+            if focused is not None and any(
+                re.sub(r'^[●✓]\s*', '', n.get('text', '')) == text or n.get('content-desc', '') == text
+                for n in focused.iter('node')
+            ):
                 adb('shell','input','keyevent','23');return
             adb('shell','input','keyevent','61')
         raise RuntimeError('TV focus could not reach: '+text)
@@ -49,12 +52,25 @@ def click(text):
         scroll_down();time.sleep(.5)
     raise RuntimeError('Missing control: '+text)
 def field(label,value):
+    if a.tv:
+        click(label)
+        time.sleep(.3)
+        target=next((n for n in nodes() if n.get('class')=='android.widget.EditText' and n.get('bounds')!='[0,0][0,0]'),None)
+        if target is None:raise RuntimeError('Missing TV input editor: '+label)
+        adb('shell','input','keyevent','123');adb('shell','input','keyevent',*(['67']*(len(target.get('text',''))+6)));adb('shell','input','text',value);adb('shell','input','keyevent','66')
+        time.sleep(.3)
+        return
     for _ in range(4):
         target=next((n for n in nodes() if n.get('class')=='android.widget.EditText' and n.get('bounds')!='[0,0][0,0]' and any(c.get('text')==label for c in n.iter('node'))),None)
         if target is not None:
             tap_node(target);adb('shell','input','keyevent','123');adb('shell','input','keyevent',*(['67']*(len(target.get('text',''))+6)));adb('shell','input','text',value);adb('shell','input','keyevent','4');return
         scroll_down()
     raise RuntimeError('Missing input: '+label)
+def tap_player_control(text):
+    if not any(n.get('text')==text or n.get('content-desc')==text for n in nodes()):
+        adb('shell','input','tap','540','500')
+        time.sleep(.4)
+    click(text)
 def texts():return [n.get('text','') for n in nodes() if n.get('text')]
 def screenshot(name):a.output.joinpath(name+'.png').write_bytes(adb('exec-out','screencap','-p'))
 package='app.umuo.player'+('.tv' if a.tv else '')
@@ -78,7 +94,17 @@ else:
     field('服务器地址',f'http://127.0.0.1:{a.port}/'+('dav/' if a.kind=='WEBDAV' else ''))
 field('用户名','fixture');field('密码','fixture');click('连接并保存' if a.tv else '保存并连接');time.sleep(1)
 if a.kind=='WEBDAV':
-    click('影视库');time.sleep(.5);click('扫描 / 恢复');time.sleep(1);screenshot(('tv' if a.tv else 'phone')+'-wall')
+    click('影视库');time.sleep(.5)
+    if a.tv:
+        click('扫描 / 恢复')
+    elif '扫描本地 NFO 与海报' in texts():
+        click('扫描本地 NFO 与海报')
+    else:
+        click('媒体库选项');time.sleep(.3);click('扫描 / 恢复')
+    for _ in range(15):
+        if '合成测试电影' in texts():break
+        time.sleep(.5)
+    screenshot(('tv' if a.tv else 'phone')+'-wall')
     click('合成测试电影')
 else:click('合成测试电影')
 if a.tv:
@@ -93,9 +119,9 @@ assert not any('播放失败' in v for v in all_text),all_text
 if a.tv:
     adb('shell','input','keyevent','22');time.sleep(.5);adb('shell','input','keyevent','23')
 else:
-    click('+10 秒')
+    tap_player_control('+10 秒')
     if a.kind=='WEBDAV':
-        click('字幕');click('Arrival.2024.srt');adb('shell','input','keyevent','4')
+        tap_player_control('字幕');click('Arrival.2024.srt');adb('shell','input','keyevent','4')
 time.sleep(.5);all_text=texts();screenshot(('tv' if a.tv else 'phone')+'-'+a.kind.lower()+'-player')
 adb('shell','input','keyevent','4');time.sleep(.5)
 log=adb('logcat','-d','-s','UmuoPlayback:I','*:S').decode()

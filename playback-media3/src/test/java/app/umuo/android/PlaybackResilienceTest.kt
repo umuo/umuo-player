@@ -1,10 +1,14 @@
 package app.umuo.android
 
 import androidx.media3.common.PlaybackException
+import app.umuo.core.model.MediaId
+import app.umuo.core.model.MediaItem
+import app.umuo.core.model.MediaKind
 import app.umuo.core.network.MediaRedirectFailure
 import app.umuo.core.playback.PlaybackFailureKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -92,5 +96,24 @@ class PlaybackResilienceTest {
                 failureKind = PlaybackFailureKind.UNSUPPORTED
             )
         )
+    }
+
+    @Test fun seriesContinuationKeyGroupsBySourceAndSeriesOrDirectory() {
+        val ep1 = MediaItem(MediaId("s1", "ep1"), "E1", MediaKind.EPISODE, path = "https://dav.test/Show/S01E01.mp4", series = "Show", seriesKey = "show-key")
+        val ep2 = MediaItem(MediaId("s1", "ep2"), "E2", MediaKind.EPISODE, path = "https://dav.test/Show/S01E02.mp4", series = "Show", seriesKey = "show-key")
+        val otherSource = ep2.copy(id = MediaId("s2", "ep2"))
+        val movie = MediaItem(MediaId("s1", "m1"), "Movie", MediaKind.MOVIE, path = "https://dav.test/Movie.mp4")
+        val folder = MediaItem(MediaId("s1", "dir"), "Show", MediaKind.SERIES, seriesKey = "show-key")
+
+        assertEquals(seriesContinuationKey(ep1), seriesContinuationKey(ep2))
+        assertFalse(seriesContinuationKey(ep1) == seriesContinuationKey(otherSource))
+        assertNull(seriesContinuationKey(movie))
+        assertNull(seriesContinuationKey(folder))
+
+        val dirEp1 = MediaItem(MediaId("s1", "d1"), "S01E01", MediaKind.EPISODE, path = "https://dav.test/FolderA/ep1.mp4", season = 1, episode = 1)
+        val dirEp2 = MediaItem(MediaId("s1", "d2"), "S01E02", MediaKind.EPISODE, path = "https://dav.test/FolderA/ep2.mp4", season = 1, episode = 2)
+        val dirOtherSource = dirEp1.copy(id = MediaId("s2", "d1"))
+        assertEquals(seriesContinuationKey(dirEp1), seriesContinuationKey(dirEp2))
+        assertFalse(seriesContinuationKey(dirEp1) == seriesContinuationKey(dirOtherSource))
     }
 }

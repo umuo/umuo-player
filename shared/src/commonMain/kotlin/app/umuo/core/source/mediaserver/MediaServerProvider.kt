@@ -1,6 +1,7 @@
 package app.umuo.core.source.mediaserver
 
 import app.umuo.core.model.*
+import app.umuo.core.library.LibraryCatalog
 import app.umuo.core.network.*
 import app.umuo.core.playback.*
 import app.umuo.core.source.*
@@ -83,6 +84,16 @@ abstract class MediaServerProvider(
         require(id.sourceId == connection.id)
         return mapItem(transport.json(apiPath("Users/${connection.userId}/Items/${id.value.encodeURLPathPart()}")))
     }
+    suspend fun nextEpisode(item: MediaItem): MediaItem? {
+        require(item.id.sourceId == connection.id)
+        val seriesId = item.seriesKey?.takeIf { it.isNotBlank() } ?: return null
+        val route = apiPath("Users/${connection.userId}/Items") +
+            "?ParentId=${seriesId.encodeURLParameter()}&Recursive=true&IncludeItemTypes=Episode" +
+            "&Fields=Overview,MediaSources,Genres,Tags&EnableUserData=true" +
+            "&SortBy=ParentIndexNumber,IndexNumber,SortName&SortOrder=Ascending&Limit=500"
+        val episodes = transport.json(route).rows("Items").map(::mapItem)
+        return LibraryCatalog.findNextEpisode(item, episodes)
+    }
     private fun mapItem(row: JsonObject): MediaItem {
         val id = row.text("Id")
         val userData = row["UserData"] as? JsonObject
@@ -99,7 +110,9 @@ abstract class MediaServerProvider(
             backdrop = (row["BackdropImageTags"] as? JsonArray)?.takeIf { it.isNotEmpty() }?.let {
                 resolveUrl(connection.baseUrl, apiPath("Items/$id/Images/Backdrop/0") + "?maxWidth=1600")
             }, overview = row.text("Overview"), year = row.long("ProductionYear").toInt().takeIf { it > 0 },
-            series = row.text("SeriesName").ifBlank { null }, season = row.long("ParentIndexNumber").toInt().takeIf {row.text("Type")=="Episode"},
+            series = row.text("SeriesName").ifBlank { null },
+            seriesKey = row.text("SeriesId").ifBlank { null },
+            season = row.long("ParentIndexNumber").toInt().takeIf {row.text("Type")=="Episode"},
             episode = row.long("IndexNumber").toInt().takeIf {row.text("Type")=="Episode"}, durationMs = row.long("RunTimeTicks") / 10_000,
             resumeMs = (userData?.long("PlaybackPositionTicks") ?: 0) / 10_000,
             favorite=userData?.flag("IsFavorite"),watched=userData?.flag("Played"),

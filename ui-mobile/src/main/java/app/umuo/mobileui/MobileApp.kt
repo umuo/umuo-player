@@ -58,9 +58,13 @@ import androidx.compose.ui.semantics.contentDescription
     fun addSource() { sourceSheet=false;editingId=null; editor=true; model.clearMessage() }
     fun editSource(c:SourceConnection) { sourceSheet=false;editingId=c.id; editor=true; model.clearMessage() }
     MobileCinemaTheme {
-        if(state.playing!=null) {
-            if(inPip) PlayerSurface(model,Modifier.fillMaxSize(),false)
-            else CinemaPlayer(model,onPip,onEditConnection={editingId=state.connection?.id;editor=true;model.stop()})
+        if (state.playing != null) {
+            CinemaPlayer(
+                model = model,
+                inPip = inPip,
+                onPip = onPip,
+                onEditConnection = { editingId = state.connection?.id; editor = true; model.stop() }
+            )
         } else Surface(Modifier.fillMaxSize(),color=MobileStyle.Background) {
             BackHandler(enabled=editor || tab!="媒体库" || state.selected!=null || state.wall || state.parent!=null || state.inServerSubview) {
                 when { editor->editor=false; tab!="媒体库"->tab="媒体库"; else->model.back() }

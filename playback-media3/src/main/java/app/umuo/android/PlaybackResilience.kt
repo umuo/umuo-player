@@ -2,8 +2,22 @@ package app.umuo.android
 
 import androidx.media3.common.PlaybackException
 import androidx.media3.datasource.HttpDataSource
+import app.umuo.core.model.MediaItem
+import app.umuo.core.model.MediaKind
 import app.umuo.core.network.MediaRedirectFailure
 import app.umuo.core.playback.PlaybackFailureKind
+
+internal fun seriesContinuationKey(item: MediaItem): String? {
+    if (item.isFolder) return null
+    val series = item.seriesKey?.trim()?.takeIf { it.isNotEmpty() }
+        ?: item.series?.trim()?.takeIf { it.isNotEmpty() }
+    if (series != null) return "${item.id.sourceId}\u0000series:$series"
+    if (item.kind == MediaKind.EPISODE || item.season != null || item.episode != null) {
+        val parent = item.path.substringBeforeLast('/', "").trim()
+        if (parent.isNotEmpty()) return "${item.id.sourceId}\u0000dir:$parent"
+    }
+    return null
+}
 
 internal fun clampSeekPosition(positionMs: Long, durationMs: Long): Long {
     if (durationMs <= 0L) return positionMs.coerceAtLeast(0L)

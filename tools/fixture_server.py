@@ -147,6 +147,7 @@ def handler(root, events, auth):
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--port',type=int,default=18921);p.add_argument('--ffmpeg',default=os.environ.get('FFMPEG_EXECUTABLE','ffmpeg'));p.add_argument('--generate',action='store_true');p.add_argument('--extended',action='store_true');p.add_argument('--auth',choices=['none','basic','digest'],default='basic')
     args=p.parse_args()
-    if args.generate:generate(args.root,args.extended,args.ffmpeg)
-    if not (args.root/'.umuo-fixture').exists():p.error('拒绝服务非合成目录；请先 --generate')
-    ThreadingHTTPServer(('127.0.0.1',args.port),handler(args.root,args.root/'events.jsonl',args.auth)).serve_forever()
+    root=args.root.resolve()
+    if args.generate:generate(root,args.extended,args.ffmpeg)
+    if not (root/'.umuo-fixture').exists():p.error('拒绝服务非合成目录；请先 --generate')
+    ThreadingHTTPServer(('127.0.0.1',args.port),handler(root,root/'events.jsonl',args.auth)).serve_forever()

@@ -33,8 +33,11 @@ import app.umuo.core.library.*
 import app.umuo.core.source.mediaserver.ServerView
 import app.umuo.core.network.ServerAddress
 import app.umuo.core.model.*
+import app.umuo.core.playback.PlaybackState
 import coil.ImageLoader
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 @Composable fun TvApp(model:PlayerModel) {
     val state by model.state.collectAsState()
@@ -186,51 +189,115 @@ import kotlinx.coroutines.delay
         }
     }
 }
+@Composable private fun TvPlaybackProgress(engine: Media3Engine) {
+    val state by engine.state.collectAsState()
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(timeLabel(state.positionMs), fontSize = 12.sp)
+        Text(timeLabel(state.durationMs), fontSize = 12.sp, color = Cinema.Muted)
+    }
+    androidx.compose.material3.LinearProgressIndicator(
+        progress = { if (state.durationMs > 0) (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f) else 0f },
+        modifier = Modifier.fillMaxWidth().height(3.dp),
+        color = Cinema.Accent,
+        trackColor = Color.White.copy(alpha = .2f)
+    )
+}
+
 @Composable private fun TvCinemaPlayer(model:PlayerModel) {
     val browser by model.state.collectAsState()
-    val state by model.engine.state.collectAsState()
+    val state by remember(model.engine) {
+        model.engine.state.map { it.copy(positionMs = 0L) }.distinctUntilChanged()
+    }.collectAsState(initial = PlaybackState())
     val activeError = state.error ?: browser.error
     val videoFocus=remember{FocusRequester()}
     val controlsFocus=remember{FocusRequester()}
     val recoveryFocus=remember{FocusRequester()}
-    LaunchedEffect(activeError){if(activeError!=null)recoveryFocus.requestFocus() else videoFocus.requestFocus()}
     var surfaceFocused by remember{mutableStateOf(false)}
-    var controlsVisible by remember{mutableStateOf(false)}
-    LaunchedEffect(controlsVisible){if(controlsVisible)controlsFocus.requestFocus()}
-    LaunchedEffect(browser.playing?.id){videoFocus.requestFocus()}
+    var hudVisible by remember(browser.playing?.id){mutableStateOf(true)}
+    var controlsInteractive by remember(browser.playing?.id){mutableStateOf(false)}
+    var hudInteractionTick by remember{mutableIntStateOf(0)}
+    LaunchedEffect(activeError){
+        if(activeError!=null) {
+            hudVisible = true
+            recoveryFocus.requestFocus()
+        } else {
+            controlsInteractive = false
+            hudVisible = true
+            videoFocus.requestFocus()
+        }
+    }
+    LaunchedEffect(controlsInteractive){
+        if(controlsInteractive) {
+            withFrameNanos { }
+            controlsFocus.requestFocus()
+        }
+    }
+    LaunchedEffect(browser.playing?.id){
+        if(browser.playing != null) {
+            hudVisible = true
+            controlsInteractive = false
+            videoFocus.requestFocus()
+        }
+    }
+    LaunchedEffect(hudVisible, controlsInteractive, state.playing, activeError, hudInteractionTick) {
+        if ((hudVisible || controlsInteractive) && state.playing && activeError == null) {
+            delay(if (controlsInteractive) 8_000L else 5_000L)
+            if (controlsInteractive) {
+                controlsInteractive = false
+                videoFocus.requestFocus()
+            }
+            hudVisible = false
+        }
+    }
+    val showHud = hudVisible || controlsInteractive || !state.playing || activeError != null
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         Box(Modifier.fillMaxSize().focusRequester(videoFocus).onFocusChanged{surfaceFocused=it.isFocused}.onPreviewKeyEvent {e->
             if(!surfaceFocused || e.type!=KeyEventType.KeyDown)false else when(e.key) {
-                Key.DirectionLeft->{model.engine.seekBy(-10_000);true}
-                Key.DirectionRight->{model.engine.seekBy(10_000);true}
-                Key.Enter,Key.DirectionCenter,Key.MediaPlayPause->{model.engine.toggle();true}
-                Key.DirectionDown->{if(activeError!=null)recoveryFocus.requestFocus() else controlsVisible=true;true}
+                Key.DirectionLeft->{model.engine.seekBy(-10_000);hudVisible=true;hudInteractionTick++;true}
+                Key.DirectionRight->{model.engine.seekBy(10_000);hudVisible=true;hudInteractionTick++;true}
+                Key.Enter,Key.DirectionCenter,Key.MediaPlayPause->{model.engine.toggle();hudVisible=true;hudInteractionTick++;true}
+                Key.DirectionDown->{
+                    hudVisible = true
+                    hudInteractionTick++
+                    if(activeError!=null)recoveryFocus.requestFocus() else controlsInteractive=true
+                    true
+                }
                 else->false
             }
         }.focusable()){PlayerSurface(model,Modifier.fillMaxSize(),false)}
-        Column(Modifier.align(Alignment.TopStart).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.7f),Color.Transparent))).padding(32.dp)) {
-            Text(browser.playing?.title.orEmpty(),fontSize=22.sp,fontWeight=FontWeight.Medium)
-            val httpWarning = if (browser.connection?.baseUrl?.startsWith("http://", true) == true) " · HTTP 未加密" else ""
-            Text(browser.connection?.name.orEmpty() + httpWarning,fontSize=11.sp,color=if (httpWarning.isNotEmpty()) Color(0xFFFFB74D) else Cinema.Muted,modifier=Modifier.padding(top=5.dp))
-        }
-        if(controlsVisible || !state.playing || activeError!=null)Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.9f)))).padding(32.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
-            activeError?.let{
-                Text(it,color=Color(0xFFFFB4AB))
-                Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
-                    Button(onClick={model.retryPlayback()},enabled=!browser.busy,modifier=Modifier.focusRequester(recoveryFocus)){Text("重试播放")}
-                    if(browser.connection?.kind!=SourceKind.WEBDAV)Button(onClick={model.retryPlayback(true)},enabled=!browser.busy){Text("兼容播放")}
-                }
+        if (showHud) {
+            Column(Modifier.align(Alignment.TopStart).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.7f),Color.Transparent))).padding(32.dp)) {
+                Text(browser.playing?.title.orEmpty(),fontSize=22.sp,fontWeight=FontWeight.Medium)
+                val httpWarning = if (browser.connection?.baseUrl?.startsWith("http://", true) == true) " · HTTP 未加密" else ""
+                Text(browser.connection?.name.orEmpty() + httpWarning,fontSize=11.sp,color=if (httpWarning.isNotEmpty()) Color(0xFFFFB74D) else Cinema.Muted,modifier=Modifier.padding(top=5.dp))
             }
-            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(timeLabel(state.positionMs),fontSize=12.sp);Text(timeLabel(state.durationMs),fontSize=12.sp,color=Cinema.Muted)}
-            androidx.compose.material3.LinearProgressIndicator(progress={if(state.durationMs>0)(state.positionMs.toFloat()/state.durationMs).coerceIn(0f,1f) else 0f},modifier=Modifier.fillMaxWidth().height(3.dp),color=Cinema.Accent,trackColor=Color.White.copy(alpha=.2f))
-            LazyRow(horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(5.dp),modifier=Modifier.onPreviewKeyEvent{if(it.type==KeyEventType.KeyDown && it.key==Key.DirectionUp){if(activeError!=null)recoveryFocus.requestFocus() else {videoFocus.requestFocus();controlsVisible=false};true}else false}) {
-                item{Button(onClick={model.engine.toggle()},modifier=Modifier.focusRequester(controlsFocus)){Icon(when {state.ended->Icons.Rounded.Replay;state.playing->Icons.Rounded.Pause;else->Icons.Rounded.PlayArrow},null,Modifier.size(20.dp));Text(when {state.ended->"重新播放";state.playing->"暂停";else->"播放"})}}
-                item{Button(onClick={model.engine.setSpeed(if(state.speed>=2f)1f else state.speed+.25f)}){Text("${state.speed}×")}}
-                item{Button(onClick={model.engine.selectSubtitle(null)}){Text("关闭字幕")}}
-                items(state.audioTracks,key={"audio:"+it.id}){t->Button(onClick={model.engine.selectAudio(t.id)}){Text((if(t.selected)"✓ " else "")+t.label,fontSize=11.sp)}}
-                items(state.subtitles,key={"text:"+it.id}){t->Button(onClick={model.engine.selectSubtitle(t.id)}){Column {Text((if(t.selected)"✓ " else "")+t.label,fontSize=11.sp);t.detail?.let{Text(it,fontSize=9.sp,color=Cinema.Muted,maxLines=1,overflow=TextOverflow.Ellipsis)}}}
+            Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Transparent,Color.Black.copy(alpha=.9f)))).padding(32.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+                activeError?.let{
+                    Text(it,color=Color(0xFFFFB4AB))
+                    Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
+                        Button(onClick={model.retryPlayback()},enabled=!browser.busy,modifier=Modifier.focusRequester(recoveryFocus)){Text("重试播放")}
+                        if(browser.connection?.kind!=SourceKind.WEBDAV)Button(onClick={model.retryPlayback(true)},enabled=!browser.busy){Text("兼容播放")}
+                    }
                 }
-                item{Button(onClick=model::stop){Text("结束播放")}}
+                TvPlaybackProgress(model.engine)
+                LazyRow(horizontalArrangement=Arrangement.spacedBy(16.dp),contentPadding=PaddingValues(5.dp),modifier=Modifier.onPreviewKeyEvent{
+                    if(it.type==KeyEventType.KeyDown && it.key==Key.DirectionUp){
+                        if(activeError!=null)recoveryFocus.requestFocus() else {controlsInteractive=false;hudVisible=false;videoFocus.requestFocus()}
+                        true
+                    } else {
+                        if(it.type==KeyEventType.KeyDown) hudInteractionTick++
+                        false
+                    }
+                }) {
+                    item{Button(onClick={hudInteractionTick++;model.engine.toggle()},modifier=Modifier.focusRequester(controlsFocus)){Icon(when {state.ended->Icons.Rounded.Replay;state.playing->Icons.Rounded.Pause;else->Icons.Rounded.PlayArrow},null,Modifier.size(20.dp));Text(when {state.ended->"重新播放";state.playing->"暂停";else->"播放"})}}
+                    if(browser.nextEpisode != null)item(key="next_episode"){Button(onClick={hudInteractionTick++;model.playNextEpisode()}){Icon(Icons.Rounded.SkipNext,null,Modifier.size(20.dp));Text("下一集")}}
+                    item{Button(onClick={hudInteractionTick++;model.engine.setSpeed(if(state.speed>=2f)1f else state.speed+.25f)}){Text("${state.speed}×")}}
+                    item{Button(onClick={hudInteractionTick++;model.engine.selectSubtitle(null)}){Text("关闭字幕")}}
+                    items(state.audioTracks,key={"audio:"+it.id}){t->Button(onClick={hudInteractionTick++;model.engine.selectAudio(t.id)}){Text((if(t.selected)"✓ " else "")+t.label,fontSize=11.sp)}}
+                    items(state.subtitles,key={"text:"+it.id}){t->Button(onClick={hudInteractionTick++;model.engine.selectSubtitle(t.id)}){Column {Text((if(t.selected)"✓ " else "")+t.label,fontSize=11.sp);t.detail?.let{Text(it,fontSize=9.sp,color=Cinema.Muted,maxLines=1,overflow=TextOverflow.Ellipsis)}}}
+                    }
+                    item{Button(onClick=model::stop){Text("结束播放")}}
+                }
             }
         }
     }
@@ -240,6 +307,7 @@ import kotlinx.coroutines.delay
     val scan by model.scanner.state.collectAsState()
     val scanSpeed by model.scanPreferences.speed.collectAsState()
     val autoPreviews by model.scanPreferences.autoPreviews.collectAsState()
+    val gestureSettings by model.playbackPreferences.state.collectAsState()
     var enabled by remember{mutableStateOf(state.tmdbEnabled)};var token by remember{mutableStateOf("")}
     val saveFocus = remember { FocusRequester() }
     val actions = remember { BringIntoViewRequester() }
@@ -258,6 +326,9 @@ import kotlinx.coroutines.delay
             ScanSpeed.entries.forEach {value->Button(enabled=!scan.running,onClick={model.scanPreferences.setSpeed(value)}){Text((if(scanSpeed==value)"✓ " else "")+value.label,fontSize=11.sp)}}
         }
         Button(onClick={model.scanPreferences.setAutoPreviews(!autoPreviews)}) {Text(if(autoPreviews)"视频预览提帧：开启" else "视频预览提帧：关闭")}
+        Button(onClick={model.playbackPreferences.update(gestureSettings.copy(autoPlayNext=!gestureSettings.autoPlayNext))}) {
+            Text(if(gestureSettings.autoPlayNext)"剧集自动连播：开启" else "剧集自动连播：关闭")
+        }
         Text("本地 NFO 优先。开启后扫描与手动匹配会查询影视标题，不上传媒体地址和账号。",color=Cinema.Muted,fontSize=14.sp)
         Button(onClick={enabled=!enabled}){Text(if(enabled)"TMDB：开启" else "TMDB：关闭")}
         TvTextField(token,{token=it},"TMDB 访问令牌",Modifier.fillMaxWidth(),password=true)

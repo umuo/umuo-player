@@ -33,12 +33,22 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import app.umuo.android.*
+import app.umuo.core.playback.PlaybackState
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable fun CinemaPlayer(model:PlayerModel,onPip:()->Unit,onEditConnection:()->Unit) {
+@Composable fun CinemaPlayer(
+    model: PlayerModel,
+    inPip: Boolean = false,
+    onPip: () -> Unit,
+    onEditConnection: () -> Unit
+) {
     val browser by model.state.collectAsState()
-    val state by model.engine.state.collectAsState()
+    val state by remember(model.engine) {
+        model.engine.state.map { it.copy(positionMs = 0L) }.distinctUntilChanged()
+    }.collectAsState(initial = PlaybackState())
     val metrics by model.engine.metrics.collectAsState()
     val gestures by model.playbackPreferences.state.collectAsState()
     var locked by rememberSaveable(browser.playing?.id?.value) {mutableStateOf(false)}
@@ -50,6 +60,12 @@ import kotlinx.coroutines.delay
     var controls by remember {mutableStateOf(true)}
     var panel by remember {mutableStateOf<String?>(null)}
     var dragging by remember {mutableStateOf<Float?>(null)}
+    LaunchedEffect(inPip) {
+        if (inPip) {
+            panel = null
+            feedback = null
+        }
+    }
     val activity=LocalContext.current as? Activity
     val landscape=LocalConfiguration.current.orientation==Configuration.ORIENTATION_LANDSCAPE
     DisposableEffect(activity) {
@@ -67,16 +83,23 @@ import kotlinx.coroutines.delay
     }
     val activeError = state.error ?: browser.error
     val activeKind = state.failureKind ?: browser.failureKind
-    LaunchedEffect(controls,state.playing,panel,feedbackVersion,dragging!=null,activeError) {
-        if(controls && state.playing && panel==null && dragging==null && activeError==null){delay(5_000);controls=false}
+    LaunchedEffect(controls,state.playing,panel,feedbackVersion,dragging!=null,activeError,inPip) {
+        if(!inPip && controls && state.playing && panel==null && dragging==null && activeError==null){delay(5_000);controls=false}
     }
     LaunchedEffect(locked,unlockVisible,feedbackVersion) {if(locked && unlockVisible){delay(4_000);unlockVisible=false}}
     LaunchedEffect(activeError){if(activeError!=null){locked=false;controls=true}}
-    BackHandler {when {locked->{unlockVisible=true;showFeedback(GestureFeedback("已锁定，请先解锁"))};panel!=null->panel=null;else->model.stop()}}
+    BackHandler(enabled = !inPip) {when {locked->{unlockVisible=true;showFeedback(GestureFeedback("已锁定，请先解锁"))};panel!=null->panel=null;else->model.stop()}}
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        PlayerSurface(model,Modifier.fillMaxSize(),onSingleTap={if(locked)unlockVisible=!unlockVisible else if(activeError==null)controls=!controls else controls=true},onFeedback={showFeedback(it)},gesturesLocked=locked)
-        if(state.buffering)CircularProgressIndicator(Modifier.align(Alignment.Center).size(36.dp),color=MobileStyle.Accent,strokeWidth=2.dp)
-        AnimatedVisibility(visible=controls && !locked,enter=fadeIn(),exit=fadeOut()) {
+        PlayerSurface(
+            model = model,
+            modifier = Modifier.fillMaxSize(),
+            touch = !inPip,
+            onSingleTap = { if (locked) unlockVisible = !unlockVisible else if (activeError == null) controls = !controls else controls = true },
+            onFeedback = { showFeedback(it) },
+            gesturesLocked = locked
+        )
+        if(!inPip && state.buffering)CircularProgressIndicator(Modifier.align(Alignment.Center).size(36.dp),color=MobileStyle.Accent,strokeWidth=2.dp)
+        AnimatedVisibility(visible=!inPip && controls && !locked,enter=fadeIn(),exit=fadeOut()) {
             Box(Modifier.fillMaxSize()) {
                 Row(Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Brush.verticalGradient(listOf(Color.Black.copy(alpha=.8f),Color.Transparent)))
                     .statusBarsPadding().padding(horizontal=14.dp,vertical=14.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -102,21 +125,16 @@ import kotlinx.coroutines.delay
                     .navigationBarsPadding().padding(start=24.dp,end=24.dp,top=28.dp,bottom=12.dp)) {
                     activeError?.let {PlaybackRecovery(it,activeKind,browser.connection?.kind!=app.umuo.core.model.SourceKind.WEBDAV,browser.busy,{model.retryPlayback()},{model.retryPlayback(true)},onEditConnection)}
                     if(!state.seekable)Text("此资源仅支持顺序播放",color=MobileStyle.Muted,fontSize=11.sp)
-                    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween) {
-                        Text(timeLabel((dragging?.toLong() ?: state.positionMs)),fontSize=11.sp,color=Color.White)
-                        Text(timeLabel(state.durationMs),fontSize=11.sp,color=Color.White.copy(alpha=.5f))
-                    }
-                    Slider(value=dragging ?: state.positionMs.toFloat(),onValueChange={dragging=it;controls=true},
-                        onValueChangeFinished={dragging?.let {model.engine.seekTo(it.toLong())};dragging=null},
-                        valueRange=0f..state.durationMs.coerceAtLeast(1).toFloat(),enabled=state.seekable && state.durationMs>0,
-                        thumb={Box(Modifier.size(10.dp).background(Color.White,CircleShape))},
-                        track={Box(Modifier.fillMaxWidth().height(3.dp).background(Color.White.copy(alpha=.22f),CircleShape)) {
-                            Box(Modifier.fillMaxWidth(((dragging ?: state.positionMs.toFloat())/state.durationMs.coerceAtLeast(1)).coerceIn(0f,1f)).fillMaxHeight().background(Color.White,CircleShape))
-                        }},
-                        colors=SliderDefaults.colors(thumbColor=Color.White,activeTrackColor=Color.White,inactiveTrackColor=Color.White.copy(alpha=.22f)),modifier=Modifier.fillMaxWidth().height(34.dp))
+                    MobilePlaybackProgress(
+                        engine = model.engine,
+                        dragging = dragging,
+                        onDragChange = { dragging = it; controls = true },
+                        onDragFinished = { dragging?.let { model.engine.seekTo(it.toLong()) }; dragging = null }
+                    )
                     PlaybackToolbar(
                         speed=state.speed,
                         onSpeed={panel="播放速度"},onAudio={panel="音轨"},onSubtitles={panel="字幕"},
+                        onNextEpisode=if(browser.nextEpisode != null) model::playNextEpisode else null,
                         onLock={locked=true;unlockVisible=true;controls=false;panel=null;model.engine.restoreBoost()},
                         onPip=onPip,onFullscreen={activity?.requestedOrientation=if(landscape)ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE},
                         landscape=landscape
@@ -124,11 +142,11 @@ import kotlinx.coroutines.delay
                 }
             }
         }
-        if(locked && unlockVisible) FilledIconButton(onClick={locked=false;controls=true},modifier=Modifier.align(Alignment.CenterStart).padding(20.dp).size(52.dp),
+        if(!inPip && locked && unlockVisible) FilledIconButton(onClick={locked=false;controls=true},modifier=Modifier.align(Alignment.CenterStart).padding(20.dp).size(52.dp),
             colors=IconButtonDefaults.filledIconButtonColors(containerColor=Color.Black.copy(alpha=.7f),contentColor=Color.White)) {
             Icon(Icons.Rounded.LockOpen,"解锁播放器")
         }
-        feedback?.let { value ->
+        if(!inPip) feedback?.let { value ->
             val alignment=when(value.side) { -1->Alignment.CenterStart; 1->Alignment.CenterEnd; else->Alignment.Center }
             // 纯绘制层不拦截触摸，提示出现时仍可继续双击或开始下一次滑动。
             Box(Modifier.align(alignment).padding(horizontal=32.dp).widthIn(min=120.dp,max=220.dp)
@@ -139,7 +157,7 @@ import kotlinx.coroutines.delay
                 }
             }
         }
-        if(panel!=null)ModalBottomSheet(sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true),onDismissRequest={panel=null;controls=true},containerColor=MobileStyle.Surface) {
+        if(!inPip && panel!=null)ModalBottomSheet(sheetState=rememberModalBottomSheetState(skipPartiallyExpanded=true),onDismissRequest={panel=null;controls=true},containerColor=MobileStyle.Surface) {
             Column(Modifier.fillMaxWidth().padding(horizontal=24.dp).navigationBarsPadding()) {
                 Text(panel!!,fontSize=22.sp,fontWeight=FontWeight.SemiBold,modifier=Modifier.padding(bottom=16.dp))
                 when(panel) {
@@ -163,4 +181,39 @@ import kotlinx.coroutines.delay
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MobilePlaybackProgress(
+    engine: Media3Engine,
+    dragging: Float?,
+    onDragChange: (Float) -> Unit,
+    onDragFinished: () -> Unit
+) {
+    val state by engine.state.collectAsState()
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(timeLabel(dragging?.toLong() ?: state.positionMs), fontSize = 11.sp, color = Color.White)
+        Text(timeLabel(state.durationMs), fontSize = 11.sp, color = Color.White.copy(alpha = .5f))
+    }
+    Slider(
+        value = dragging ?: state.positionMs.toFloat(),
+        onValueChange = onDragChange,
+        onValueChangeFinished = onDragFinished,
+        valueRange = 0f..state.durationMs.coerceAtLeast(1).toFloat(),
+        enabled = state.seekable && state.durationMs > 0,
+        thumb = { Box(Modifier.size(10.dp).background(Color.White, CircleShape)) },
+        track = {
+            Box(Modifier.fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = .22f), CircleShape)) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(((dragging ?: state.positionMs.toFloat()) / state.durationMs.coerceAtLeast(1)).coerceIn(0f, 1f))
+                        .fillMaxHeight()
+                        .background(Color.White, CircleShape)
+                )
+            }
+        },
+        colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = .22f)),
+        modifier = Modifier.fillMaxWidth().height(34.dp)
+    )
 }

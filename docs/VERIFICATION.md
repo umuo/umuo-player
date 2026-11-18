@@ -218,3 +218,20 @@ Pad 内容页补充：合成剧集单集详情中，「匹配标题」输入返�
 - 验证限制：
   - 上述运行验证均基于合成样片与本机受控服务；真实 NAS / WebDAV / Emby / Jellyfin 服务器、Apple 平台运行时实际播放、HDR 映射及音频直通均未实测，不扩大兼容结论。
   - 原始测试日志与截图存放在已忽略的 `verification/local/`（`r8-smoke/` 与 `current/`），测试后已终止模拟器与临时服务器进程。
+
+## 第二轮性能优化、剧集连播与画中画增强
+
+- 改动摘要：
+  - `shared`：SQLDelight 数据库由 v2 升级至 v3（`2.sqm`），补充 `indexed_media(source_id, parent)` 与单调递进 `playback_position.updated_at` 降序索引；`LibraryRepository` / `LibraryScanner` 新增批量入队、目录事务提交与 `overrideIds` 预载；`WebDavProvider` 复用匿名探测客户端并在 `PROPFIND` 403/失败时退化保留正片播放；`PlaybackCoordinator` 支持注入 `ioContext` 卸载数据库写入；`LibraryCatalog.findNextEpisode` 与 `MediaServerProvider.nextEpisode` 支持同源剧集下一集解析。
+  - `playback-media3`：`Media3Engine` 缓存音轨/字幕列表，并按 `seriesContinuationKey`（含来源 ID 隔离）在同剧集续集切换时延续倍速、音轨及字幕偏好；`PlaybackPreferences` 新增并持久化 `autoPlayNext`（默认开启）；`PlayerSurface` 支持动态切换 `GestureOverlay` 触控状态而不卸载 `PlayerView`；`VideoThumbnails` 增量追踪缓存体积并限制失败尝试集合大小；`PlayerModel` 将剩余详情、偏好匹配、用户状态同步移至 `Dispatchers.IO`，修正服务器续播导入排序并支持单次触发自动连播下一集。
+  - `ui-mobile` / `app-mobile` / `ui-tv`：`CinemaPlayer` 与 `TvApp` 将每 500ms 变化的 `positionMs` 隔离至独立叶组件减少重绘；移动端保持单个 `CinemaPlayer` 挂载进入画中画（消除切换黑屏/重建）并在 `MainActivity` 通过非导出 `BroadcastReceiver` 注册 `RemoteAction`（快退、暂停/播放、快进）；移动端与 TV 端新增「下一集」与「剧集播完自动连播」开关；TV 端播放全屏 HUD 在起播或方向键操作 5–8 秒后自动完整隐藏（含顶部标题与 HTTP 提示条），左右快进快退仅轻量唤醒 HUD 而不抢走画面焦点。
+  - CI 与工具：`.github/workflows/verify.yml` 增加临时签名密钥 R8 Release 构建与 Lint 门禁；`tools/fixture_server.py` 启动时规范化 `--root` 符号链接路径；`tools/qa_android.py` 适配 `TvTextField` 焦点编辑、移动端空库扫描按钮及控制栏自动隐藏唤醒点击。
+- 已完成的自动化验证：
+  - `:shared:jvmTest`：57 项通过（0 失败，0 跳过；涵盖 v1→v3 数据库迁移、同毫秒 `updated_at` 单调续看排序、`findNextEpisode`、`MediaServerProvider.nextEpisode` 与 `PROPFIND` 403 回退）。
+  - `:playback-media3:testDebugUnitTest`：13 项通过（0 失败，0 跳过；含 `seriesContinuationKey` 来源隔离单测）。
+  - `-PenableAppleTargets=false` Debug 构建与 Lint：`:app-mobile:assembleDebug`（23,282,516 B）、`:app-tv:assembleDebug`（23,512,269 B）、`:app-mobile:lintDebug`（0 errors, 39 warnings）、`:app-tv:lintDebug`（0 errors, 1 warning）均通过。
+  - 临时密钥 R8 Release 检查：`:app-mobile:assembleRelease`（3.2M）、`:app-tv:assembleRelease`（3.0M）、`:app-mobile:lintRelease`（0 errors, 26 warnings）、`:app-tv:lintRelease`（0 errors, 1 warning）均通过，检查后已清理临时密钥与测试 Release 包。
+  - Apple KMP 编译边界：`:shared:compileKotlinIosSimulatorArm64` 与 `:shared:compileKotlinTvosSimulatorArm64` 编译通过。
+  - 工具链与夹具检查：`python3 -m py_compile tools/fixture_server.py tools/qa_android.py` 通过；`tools/fixture_server.py` 在 macOS `$TMPDIR` 符号链接路径下 `PROPFIND` 返回 `207`。
+- 未完成的运行时验证与已知边界：
+  - 按用户要求直接推送当前提交，本轮新增的画中画 `RemoteAction`、无黑屏无缝切入画中画、剧集自动/手动连播切换及 TV 端完整 HUD 自动隐藏尚未在 Android 模拟器或真机完成 UI/播放实测与截图审查，不标为运行时通过；真实 NAS / Emby / Jellyfin 服务器、Apple 平台运行时实际播放、HDR 映射及音频直通仍未实测。

@@ -18,6 +18,7 @@ internal fun PlaybackToolbar(
     onSpeed: () -> Unit,
     onAudio: () -> Unit,
     onSubtitles: () -> Unit,
+    onNextEpisode: (() -> Unit)? = null,
     onLock: () -> Unit,
     onPip: () -> Unit,
     onFullscreen: () -> Unit,
@@ -45,10 +46,13 @@ internal fun PlaybackToolbar(
                     IconButton(onClick = onAudio) { Icon(Icons.Rounded.GraphicEq, "音轨", tint = Color.White) }
                     IconButton(onClick = onSubtitles) { Icon(Icons.Rounded.Subtitles, "字幕", tint = Color.White) }
                     Spacer(Modifier.weight(1f))
-                    PlaybackActions(onLock, onPip, onFullscreen, landscape)
+                    PlaybackActions(onNextEpisode, onLock, onPip, onFullscreen, landscape)
                 }
             }
             if(compact) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                if (onNextEpisode != null) {
+                    IconButton(onClick = onNextEpisode) { Icon(Icons.Rounded.SkipNext, "下一集", tint = Color.White) }
+                }
                 IconButton(onClick = onLock) { Icon(Icons.Rounded.Lock, "锁定播放器", tint = Color.White) }
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = onPip) { Icon(Icons.Rounded.PictureInPictureAlt, "画中画", tint = Color.White) }
@@ -59,7 +63,16 @@ internal fun PlaybackToolbar(
 }
 
 @Composable
-private fun PlaybackActions(onLock: () -> Unit, onPip: () -> Unit, onFullscreen: () -> Unit, landscape: Boolean) {
+private fun PlaybackActions(
+    onNextEpisode: (() -> Unit)?,
+    onLock: () -> Unit,
+    onPip: () -> Unit,
+    onFullscreen: () -> Unit,
+    landscape: Boolean
+) {
+    if (onNextEpisode != null) {
+        IconButton(onClick = onNextEpisode) { Icon(Icons.Rounded.SkipNext, "下一集", tint = Color.White) }
+    }
     IconButton(onClick = onLock) { Icon(Icons.Rounded.Lock, "锁定播放器", tint = Color.White) }
     IconButton(onClick = onPip) { Icon(Icons.Rounded.PictureInPictureAlt, "画中画", tint = Color.White) }
     FullscreenButton(onFullscreen, landscape)

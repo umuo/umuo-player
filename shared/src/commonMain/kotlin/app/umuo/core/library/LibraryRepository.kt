@@ -3,6 +3,7 @@ package app.umuo.core.library
 import app.umuo.core.db.*
 import app.umuo.core.model.*
 import app.umuo.core.network.wireJson
+import io.ktor.util.date.GMTDate
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
 
@@ -27,6 +28,9 @@ class LibraryRepository(private val db: UmuoDatabase) {
         }
     }
     fun indexed(id: MediaId): MediaItem? = q.byId(id.sourceId, id.value).executeAsOneOrNull()?.let { wireJson.decodeFromString(it.payload) }
+    fun directoryItems(source: String, parent: String): Map<String, MediaItem> =
+        q.children(source, parent).executeAsList().associate { it.media_id to wireJson.decodeFromString(it.payload) }
+    fun overrideIds(source: String): Set<String> = q.allOverrides(source).executeAsList().map { it.media_id }.toSet()
     private fun overrideMap(source: String): Map<String, String?> =
         q.allOverrides(source).executeAsList().associate { it.media_id to it.payload }
     private fun mergeOverride(item: MediaItem, payload: String?): MediaItem {
@@ -58,7 +62,8 @@ class LibraryRepository(private val db: UmuoDatabase) {
     fun match(item: MediaItem, metadata: MediaItem?) = q.setOverride(item.id.sourceId, item.id.value, metadata?.let { wireJson.encodeToString(it) })
     fun automaticMatchAllowed(id: MediaId): Boolean = q.overrideFor(id.sourceId, id.value).executeAsOneOrNull() == null
     fun position(id: MediaId): Long = q.position(id.sourceId, id.value).executeAsOneOrNull() ?: 0
-    fun savePosition(id: MediaId, position: Long) = q.savePosition(id.sourceId, id.value, position.coerceAtLeast(0))
+    fun savePosition(id: MediaId, position: Long, updatedAtMs: Long = GMTDate().timestamp) =
+        q.savePosition(id.sourceId, id.value, position.coerceAtLeast(0), updatedAtMs, id.sourceId)
     fun recent(source: String): List<MediaItem> = db.transactionWithResult {
         val overrides = overrideMap(source)
         q.recentItems(source).executeAsList().map {
@@ -76,8 +81,14 @@ class LibraryRepository(private val db: UmuoDatabase) {
             wireJson.encodeToString(item.copy(durationMs = duration)))
     }
     fun enqueue(source: String, path: String) = q.enqueue(source, path)
+    fun enqueueAll(source: String, paths: Iterable<String>) = db.transaction { paths.forEach { q.enqueue(source, it) } }
     fun pending(source: String): List<String> = q.queue(source).executeAsList()
     fun finishDirectory(source: String, path: String) = q.finishDirectory(source, path)
+    fun commitDirectory(source: String, directory: String, items: List<MediaItem>, expectedIds: Set<String>) = db.transaction {
+        items.forEach { upsert(it, directory) }
+        q.children(source, directory).executeAsList().filter { it.media_id !in expectedIds }.forEach { q.removeMedia(source, it.media_id) }
+        q.finishDirectory(source, directory)
+    }
     fun pruneDirectory(source: String, parent: String, found: Set<String>) {
         db.transaction { q.children(source, parent).executeAsList().filter { it.media_id !in found }.forEach { q.removeMedia(source, it.media_id) } }
     }

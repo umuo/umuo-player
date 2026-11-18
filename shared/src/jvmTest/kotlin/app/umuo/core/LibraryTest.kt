@@ -130,4 +130,58 @@ class LibraryTest {
             assertEquals("Other Matched",r.items("b").single().title)
         }finally{driver.close()}
     }
+
+    @Test fun schemaMigrationV1ToV3PreservesPositionsAndMonotonicRecentOrder() {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        try {
+            driver.execute(null, "CREATE TABLE indexed_media (source_id TEXT NOT NULL, media_id TEXT NOT NULL, parent TEXT NOT NULL, fingerprint TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(source_id, media_id))", 0)
+            driver.execute(null, "CREATE TABLE metadata_override (source_id TEXT NOT NULL, media_id TEXT NOT NULL, payload TEXT, PRIMARY KEY(source_id, media_id))", 0)
+            driver.execute(null, "CREATE TABLE playback_position (source_id TEXT NOT NULL, media_id TEXT NOT NULL, milliseconds INTEGER NOT NULL, PRIMARY KEY(source_id, media_id))", 0)
+            driver.execute(null, "CREATE TABLE scan_queue (source_id TEXT NOT NULL, directory TEXT NOT NULL, PRIMARY KEY(source_id, directory))", 0)
+            driver.execute(null, "CREATE TABLE connections (source_id TEXT NOT NULL PRIMARY KEY, payload TEXT NOT NULL)", 0)
+
+            val payload1 = """{"id":{"sourceId":"a","value":"1"},"title":"First"}"""
+            val payload2 = """{"id":{"sourceId":"a","value":"2"},"title":"Second"}"""
+            driver.execute(null, "INSERT INTO indexed_media VALUES ('a', '1', '/', '', '$payload1')", 0)
+            driver.execute(null, "INSERT INTO indexed_media VALUES ('a', '2', '/', '', '$payload2')", 0)
+            driver.execute(null, "INSERT INTO playback_position VALUES ('a', '1', 1000)", 0)
+            driver.execute(null, "INSERT INTO playback_position VALUES ('a', '2', 2000)", 0)
+
+            assertEquals(3L, UmuoDatabase.Schema.version)
+            UmuoDatabase.Schema.migrate(driver, 1, UmuoDatabase.Schema.version)
+
+            val r = LibraryRepository(UmuoDatabase(driver))
+            assertEquals(listOf("2", "1"), r.recent("a").map { it.id.value })
+
+            r.savePosition(MediaId("a", "1"), 4000, updatedAtMs = 5000L)
+            r.savePosition(MediaId("a", "2"), 5000, updatedAtMs = 5000L)
+            assertEquals(listOf("2", "1"), r.recent("a").map { it.id.value })
+
+            r.savePosition(MediaId("a", "1"), 6000, updatedAtMs = 5000L)
+            assertEquals(listOf("1", "2"), r.recent("a").map { it.id.value })
+        } finally {
+            driver.close()
+        }
+    }
+
+    @Test fun findNextEpisodeOrdersBySeasonEpisodeAndScopedSource() {
+        val s1e1 = MediaItem(MediaId("a", "ep1"), "E1", MediaKind.EPISODE, path = "https://dav.test/Show/S01E01.mp4", series = "Show", seriesKey = "show-1", season = 1, episode = 1)
+        val s1e2 = MediaItem(MediaId("a", "ep2"), "E2", MediaKind.EPISODE, path = "https://dav.test/Show/S01E02.mp4", series = "Show", seriesKey = "show-1", season = 1, episode = 2)
+        val s2e1 = MediaItem(MediaId("a", "ep3"), "E3", MediaKind.EPISODE, path = "https://dav.test/Show/S02E01.mp4", series = "Show", seriesKey = "show-1", season = 2, episode = 1)
+        val otherSource = s1e2.copy(id = MediaId("b", "ep2"))
+        val movie = MediaItem(MediaId("a", "m1"), "Movie", MediaKind.MOVIE, path = "https://dav.test/Movie.mp4")
+        val all = listOf(s2e1, otherSource, s1e1, s1e2, movie)
+
+        assertEquals(s1e2, LibraryCatalog.findNextEpisode(s1e1, all))
+        assertEquals(s2e1, LibraryCatalog.findNextEpisode(s1e2, all))
+        assertNull(LibraryCatalog.findNextEpisode(s2e1, all))
+        assertNull(LibraryCatalog.findNextEpisode(movie, all))
+        assertNull(LibraryCatalog.findNextEpisode(s1e1, listOf(s1e1, otherSource)))
+
+        val dirEp1 = MediaItem(MediaId("a", "d1"), "S01E01", MediaKind.EPISODE, path = "https://dav.test/Dir/ep1.mp4", season = 1, episode = 1)
+        val dirEp2 = MediaItem(MediaId("a", "d2"), "S01E02", MediaKind.EPISODE, path = "https://dav.test/Dir/ep2.mp4", season = 1, episode = 2)
+        val otherDirEp3 = MediaItem(MediaId("a", "d3"), "S01E03", MediaKind.EPISODE, path = "https://dav.test/Other/ep3.mp4", season = 1, episode = 3)
+        assertEquals(dirEp2, LibraryCatalog.findNextEpisode(dirEp1, listOf(dirEp2, otherDirEp3, dirEp1)))
+        assertNull(LibraryCatalog.findNextEpisode(dirEp2, listOf(dirEp2, otherDirEp3, dirEp1)))
+    }
 }

@@ -41,6 +41,37 @@ object LibraryCatalog {
         it.hasMetadata && it.kind == MediaKind.EPISODE && seriesKey(it) == key
     }.sortedWith(compareBy<MediaItem> { it.season ?: 0 }.thenBy { it.episode ?: 0 }.thenBy {it.title})
 
+    /** 从候选列表中查找下一集：优先按同剧集匹配，其次按同目录剧集/分集命名序匹配。 */
+    fun findNextEpisode(current: MediaItem, candidates: List<MediaItem>): MediaItem? {
+        if (current.isFolder) return null
+        val sameSource = candidates.filter { it.id.sourceId == current.id.sourceId && !it.isFolder }
+        val series = current.seriesKey?.takeIf { it.isNotBlank() } ?: current.series?.takeIf { it.isNotBlank() }
+        val pool = when {
+            series != null -> sameSource.filter {
+                (it.seriesKey?.takeIf { k -> k.isNotBlank() } ?: it.series) == series &&
+                    (it.kind == MediaKind.EPISODE || it.season != null || it.episode != null || it.id == current.id)
+            }
+            current.kind == MediaKind.EPISODE || current.season != null || current.episode != null -> {
+                val parent = current.path.substringBeforeLast('/', "")
+                sameSource.filter {
+                    it.path.substringBeforeLast('/', "") == parent &&
+                        (it.kind == MediaKind.EPISODE || it.season != null || it.episode != null || it.id == current.id)
+                }
+            }
+            else -> return null
+        }
+        val ordered = (if (pool.any { it.id == current.id }) pool else pool + current)
+            .distinctBy { it.id }
+            .sortedWith(
+                compareBy<MediaItem> { it.season ?: Int.MAX_VALUE }
+                    .thenBy { it.episode ?: Int.MAX_VALUE }
+                    .thenBy { it.title }
+                    .thenBy { it.path }
+            )
+        val index = ordered.indexOfFirst { it.id == current.id }
+        return if (index >= 0) ordered.getOrNull(index + 1) else null
+    }
+
     fun collections(item: MediaItem): List<String> = (item.collections+listOfNotNull(item.collection)).map(String::trim).filter {it.isNotEmpty()}.distinct()
     private fun key(value: String) = value.trim().replace(Regex("\\s+")," ").lowercase()
     private fun contains(values: List<String>, value: String) = values.any {key(it)==key(value)}

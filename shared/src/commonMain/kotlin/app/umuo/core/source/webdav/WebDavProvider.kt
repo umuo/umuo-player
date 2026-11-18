@@ -13,6 +13,7 @@ import io.ktor.client.statement.*
 import io.ktor.http.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.concurrent.Volatile
 
 val videoExtensions = setOf("mp4", "mkv", "m4v", "avi", "mov", "ts", "m2ts", "webm")
 data class DavEntry(val url: String, val name: String, val directory: Boolean, val fingerprint: String) {
@@ -25,6 +26,14 @@ class WebDavProvider(
     override var connection = initial
         private set
     private var transport = createTransport(initial)
+    @Volatile private var anonymousCreated = false
+    private val anonymousProbeClient by lazy {
+        anonymousCreated = true
+        HttpClient(baseClient.engine) {
+            followRedirects = false; expectSuccess = false
+            install(HttpTimeout) { requestTimeoutMillis = 30_000; connectTimeoutMillis = 15_000 }
+        }
+    }
     private fun createTransport(c: SourceConnection) = HttpTransport(normalizedBase(c.baseUrl), authenticatedClient(baseClient, c, secrets))
     override val capabilities = SourceCapabilities(fileTree = true)
     override suspend fun authenticate(credentials: MediaCredentials): SourceConnection {
@@ -85,14 +94,11 @@ class WebDavProvider(
         require(request.item.id.sourceId == connection.id)
         val url = request.item.path
         validate(url)
-        val anonymous=HttpClient(baseClient.engine) {
-            followRedirects=false;expectSuccess=false
-            install(HttpTimeout) {requestTimeoutMillis=30_000;connectTimeoutMillis=15_000}
-        }
-        val probe=try {transport.probeMedia(url,anonymous)} finally {anonymous.close()}
-        val seekable=probe.seekable
+        val probe = transport.probeMedia(url, anonymousProbeClient)
+        val entries = runCatching { listEntries(url.substringBeforeLast('/') + "/") }.getOrDefault(emptyList())
+        val seekable = probe.seekable
         val stem = Url(url).encodedPath.substringAfterLast('/').substringBeforeLast('.').decodeURLPart()
-        val subtitles = listEntries(url.substringBeforeLast('/') + "/").filter {
+        val subtitles = entries.filter {
             !it.directory && it.extension in setOf("srt", "vtt", "ass", "ssa", "ttml", "dfxp") &&
                 (it.name.substringBeforeLast('.') == stem || it.name.startsWith("$stem.", true))
         }.map { Subtitle(it.url, it.name, it.url, subtitleMime(it.extension)) }
@@ -104,6 +110,7 @@ class WebDavProvider(
         baseClient.config {install(ScanTrafficPlugin) {this.guard=guard}},secrets,true)
     override fun close() {
         transport.close()
-        if(ownsBaseClient)baseClient.close()
+        if (anonymousCreated) anonymousProbeClient.close()
+        if (ownsBaseClient) baseClient.close()
     }
 }

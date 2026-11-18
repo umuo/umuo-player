@@ -7,14 +7,19 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.concurrent.Volatile
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 
 internal fun isUserPaused(state: PlaybackState): Boolean =
     state.paused || (!state.playing && !state.buffering && !state.ended)
 
 /** 单个播放会话；START/PROGRESS/STOP 串行上报，停止失败不触发重复计数重试。 */
 class PlaybackCoordinator(
-    private val engine: PlaybackEngine, private val library: LibraryRepository,
-    private val scope: CoroutineScope, private val warning: (String) -> Unit
+    private val engine: PlaybackEngine,
+    private val library: LibraryRepository,
+    private val scope: CoroutineScope,
+    private val ioContext: CoroutineContext = EmptyCoroutineContext,
+    private val warning: (String) -> Unit
 ) {
     @Volatile private var plan: PlaybackPlan? = null
     private var provider: MediaSourceProvider? = null
@@ -42,10 +47,12 @@ class PlaybackCoordinator(
                 val paused = isUserPaused(state)
                 if (activeSession) {
                     if (state.durationMs > 0 && state.durationMs != savedDuration) {
-                        library.saveDuration(currentPlan.item.id, state.durationMs); savedDuration = state.durationMs
+                        withContext(ioContext) { library.saveDuration(currentPlan.item.id, state.durationMs) }
+                        savedDuration = state.durationMs
                     }
                     if (lastSavedPosition < 0 || kotlin.math.abs(state.positionMs - lastSavedPosition) >= 1_000 || lastPaused != paused || state.ended) {
-                        library.savePosition(currentPlan.item.id, if (state.ended) 0 else state.positionMs)
+                        val savedPos = if (state.ended) 0L else state.positionMs
+                        withContext(ioContext) { library.savePosition(currentPlan.item.id, savedPos) }
                         lastSavedPosition = state.positionMs
                     }
                     if (!started && state.playing) {
@@ -91,10 +98,12 @@ class PlaybackCoordinator(
         val state = engine.state.value
         val paused = isUserPaused(state)
         engine.pause()
-        if ((state.ready || everReady || started) && state.error == null) {
-            library.savePosition(current.item.id, if (state.ended) 0 else state.positionMs)
-        }
         withContext(NonCancellable) {
+            if ((state.ready || everReady || started) && state.error == null) {
+                withContext(ioContext) {
+                    library.savePosition(current.item.id, if (state.ended) 0 else state.positionMs)
+                }
+            }
             if (started) report(source, current, PlaybackEventKind.STOP, state, paused)
             try { withTimeout(8_000) { source.closeSession(current) } }
             catch (_: Exception) { warning("服务器播放会话释放失败，请检查连接") }

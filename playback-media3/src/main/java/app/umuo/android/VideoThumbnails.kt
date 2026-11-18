@@ -23,6 +23,7 @@ class VideoThumbnails(context: Context, private val connection: (String) -> Sour
     private val directory = File(context.cacheDir, "video-previews").apply { mkdirs() }
     private val extraction = Mutex()
     private val attempted = mutableSetOf<String>()
+    private var cachedBytes = -1L
     private val clients = mutableMapOf<String, OkHttpClient>()
     private val mutableRevision = MutableStateFlow(0L)
     val revision = mutableRevision.asStateFlow()
@@ -32,9 +33,18 @@ class VideoThumbnails(context: Context, private val connection: (String) -> Sour
             sourceHttp(c, secrets).newBuilder().callTimeout(4, TimeUnit.SECONDS).build()
         }
     }
+    @Synchronized private fun markAttempted(key: String): Boolean {
+        if (attempted.size >= 512) attempted.clear()
+        return attempted.add(key)
+    }
+    @Synchronized private fun unmarkAttempted(key: String) {
+        attempted.remove(key)
+    }
     @Synchronized fun close() {
         clients.values.forEach { it.shutdownCleanly() }
         clients.clear()
+        attempted.clear()
+        cachedBytes = -1L
     }
     private fun key(item: MediaItem): String = MessageDigest.getInstance("SHA-256")
         .digest("${item.id.sourceId}\u0000${connection(item.id.sourceId)?.let { "${it.kind}:${it.baseUrl}:${it.username}" }}\u0000${item.id.value}\u0000${item.fingerprint}".toByteArray())
@@ -55,8 +65,9 @@ class VideoThumbnails(context: Context, private val connection: (String) -> Sour
             cached(item)?.let { return@withLock it }
             val c = connection(item.id.sourceId) ?: return@withLock null
             val target = file(item, false)
+            val previewKey = key(item)
             // 服务端影片已经提供图片；WebDAV 文件才做按需、本地提帧。
-            if(c.kind != SourceKind.WEBDAV || item.isFolder || !attempted.add(key(item))) return@withLock null
+            if(c.kind != SourceKind.WEBDAV || item.isFolder || !markAttempted(previewKey)) return@withLock null
             val http = clientFor(c)
             val job=currentCoroutineContext()[Job]
             try {
@@ -75,8 +86,8 @@ class VideoThumbnails(context: Context, private val connection: (String) -> Sour
                         if(frame != null) try { write(target, frame) } finally { frame.recycle() }
                     } finally { retriever.release() }
                 }
-            } catch(e: CancellationException) { attempted.remove(key(item));throw e }
-            catch(_: Exception) { if(job?.isActive==false)attempted.remove(key(item)); /* Range、容器或解码不支持时保留占位图，不影响浏览与播放。 */ }
+            } catch(e: CancellationException) { unmarkAttempted(previewKey); throw e }
+            catch(_: Exception) { if(job?.isActive==false) unmarkAttempted(previewKey); /* Range、容器或解码不支持时保留占位图，不影响浏览与播放。 */ }
             cached(item)
         }
     }
@@ -84,10 +95,23 @@ class VideoThumbnails(context: Context, private val connection: (String) -> Sour
         val temporary = File(directory, target.name + ".tmp")
         try {
             temporary.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 80, it) }
-            if(!temporary.renameTo(target)) throw IOException("Preview cache unavailable")
-            var total = directory.listFiles().orEmpty().sumOf { it.length() }
-            directory.listFiles().orEmpty().sortedBy { it.lastModified() }.forEach {
-                if(total > 64L * 1024 * 1024 && it != target) { val size=it.length(); if(it.delete()) total-=size }
+            val previousLength = if (target.exists()) target.length() else 0L
+            if (!temporary.renameTo(target)) throw IOException("Preview cache unavailable")
+            val newLength = target.length()
+            if (cachedBytes < 0L) {
+                cachedBytes = directory.listFiles().orEmpty().sumOf { it.length() }
+            } else {
+                cachedBytes = (cachedBytes - previousLength + newLength).coerceAtLeast(newLength)
+            }
+            if (cachedBytes > 64L * 1024 * 1024) {
+                val files = directory.listFiles().orEmpty()
+                cachedBytes = files.sumOf { it.length() }
+                files.sortedBy { it.lastModified() }.forEach {
+                    if (cachedBytes > 64L * 1024 * 1024 && it != target) {
+                        val size = it.length()
+                        if (it.delete()) cachedBytes = (cachedBytes - size).coerceAtLeast(0L)
+                    }
+                }
             }
         } finally { temporary.delete() }
     }

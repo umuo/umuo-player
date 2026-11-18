@@ -58,7 +58,7 @@ data class GestureFeedback(val text: String, val progress: Float? = null, val si
                         }
                     }
                 }
-                if(touch) addView(GestureOverlay(context, model.engine, onSingleTap, onFeedback,settings,gesturesLocked), android.widget.FrameLayout.LayoutParams(-1, -1))
+                addView(GestureOverlay(context, model.engine, onSingleTap, onFeedback, settings, gesturesLocked, touch), android.widget.FrameLayout.LayoutParams(-1, -1))
                 model.captureFrame = capture@{
                     val item = model.state.value.playing ?: return@capture
                     val surface = (getChildAt(0) as PlayerView).videoSurfaceView as? SurfaceView ?: return@capture
@@ -74,24 +74,28 @@ data class GestureFeedback(val text: String, val progress: Float? = null, val si
                 }
             }
         }, update = { frame -> (frame.getChildAt(0) as PlayerView).player = currentPlayer
-            (frame.getChildAt(1) as? GestureOverlay)?.apply { this.onSingleTap = onSingleTap; this.onFeedback = onFeedback; this.settings=settings; this.locked=gesturesLocked }
+            (frame.getChildAt(1) as? GestureOverlay)?.apply {
+                this.onSingleTap = onSingleTap
+                this.onFeedback = onFeedback
+                this.settings = settings
+                this.locked = gesturesLocked
+                this.touchEnabled = touch
+            }
         },
             onRelease = { frame -> containerRef = null; model.captureFrame = null; (frame.getChildAt(0) as PlayerView).player = null })
         LaunchedEffect(playing.playing?.id) { while(isActive) { delay(15_000); if (model.engine.state.value.playing) model.captureFrame?.invoke() } }
     }
 }
 /** 从 Peach 的独立手势状态机迁移；取消、松开和离开页面均恢复长按倍率。 */
-private class GestureOverlay(context: Context, val engine: Media3Engine, var onSingleTap: (() -> Unit)?, var onFeedback: ((GestureFeedback) -> Unit)?, var settings: GestureSettings, lockedInitially: Boolean) : View(context) {
-    var locked = lockedInitially
-        set(value) {
-            if(value && !field) {
-                val wasSeeking = gestures.mode == GestureMachine.Mode.SEEK
-                handler.removeCallbacksAndMessages(null);gestures.release();engine.restoreBoost()
-                if(wasSeeking) engine.cancelPreviewSeek()
-                dragged=false;held=false
-            }
-            field=value
-        }
+private class GestureOverlay(
+    context: Context,
+    val engine: Media3Engine,
+    var onSingleTap: (() -> Unit)?,
+    var onFeedback: ((GestureFeedback) -> Unit)?,
+    var settings: GestureSettings,
+    lockedInitially: Boolean,
+    touchInitially: Boolean = true
+) : View(context) {
     private val gestures = GestureMachine()
     private val handler = Handler(Looper.getMainLooper())
     private val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -99,6 +103,26 @@ private class GestureOverlay(context: Context, val engine: Media3Engine, var onS
     private var brightness = .5f; private var volume = 0
     private var viewportHeight = 0
     private var dragged = false; private var held = false
+    private fun cancelActiveGestures() {
+        val wasSeeking = gestures.mode == GestureMachine.Mode.SEEK
+        handler.removeCallbacksAndMessages(null)
+        gestures.release()
+        engine.restoreBoost()
+        if (wasSeeking) engine.cancelPreviewSeek()
+        dragged = false
+        held = false
+    }
+    var locked = lockedInitially
+        set(value) {
+            if (value && !field) cancelActiveGestures()
+            field = value
+        }
+    var touchEnabled = touchInitially
+        set(value) {
+            if (!value && field) cancelActiveGestures()
+            field = value
+            visibility = if (value) View.VISIBLE else View.GONE
+        }
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private val hold = Runnable { if(gestures.hold()) { held = true; engine.boost(settings.holdSpeed); onFeedback?.invoke(GestureFeedback("${settings.holdSpeed}× 倍速播放")) } }
     private val detector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
@@ -116,8 +140,13 @@ private class GestureOverlay(context: Context, val engine: Media3Engine, var onS
             return true
         }
     }).apply { setIsLongpressEnabled(false) }
-    init { isClickable = true; contentDescription = "视频：单击显示控制栏，左右双击快进快退，长按临时加速" }
+    init {
+        isClickable = true
+        contentDescription = "视频：单击显示控制栏，左右双击快进快退，长按临时加速"
+        visibility = if (touchEnabled) View.VISIBLE else View.GONE
+    }
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (!touchEnabled) return false
         if(locked) { detector.onTouchEvent(e);return true }
         when(e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -172,9 +201,7 @@ private class GestureOverlay(context: Context, val engine: Media3Engine, var onS
     }
     override fun performClick(): Boolean { super.performClick(); onSingleTap?.invoke() ?: run { engine.toggle() }; return true }
     override fun onDetachedFromWindow() {
-        val wasSeeking = gestures.mode == GestureMachine.Mode.SEEK
-        handler.removeCallbacksAndMessages(null); gestures.release(); engine.restoreBoost()
-        if(wasSeeking) engine.cancelPreviewSeek()
+        cancelActiveGestures()
         super.onDetachedFromWindow()
     }
 }

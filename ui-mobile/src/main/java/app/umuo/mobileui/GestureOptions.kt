@@ -3,6 +3,7 @@ package app.umuo.mobileui
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -21,6 +22,16 @@ import app.umuo.android.*
         }}
         Text("滑动灵敏度 · ${"%.1f".format(settings.sensitivity)}×",fontSize=14.sp)
         Slider(value=settings.sensitivity,onValueChange={model.playbackPreferences.update(settings.copy(sensitivity=it))},valueRange=.5f..2f,steps=5)
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("剧集播完自动连播", fontSize = 14.sp)
+                Text("存在下一集时自动切换并延续倍速、音轨与字幕偏好", color = MobileStyle.Muted, fontSize = 11.sp)
+            }
+            Switch(
+                checked = settings.autoPlayNext,
+                onCheckedChange = { model.playbackPreferences.update(settings.copy(autoPlayNext = it)) }
+            )
+        }
         Text("设置自动保存在当前设备；锁定播放器后只保留解锁入口。",color=MobileStyle.Muted,fontSize=12.sp)
     }
 }

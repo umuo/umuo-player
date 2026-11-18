@@ -128,7 +128,7 @@ class ProviderContractTest {
         }
     }
     @Test fun davRejectsTraversalAndRangeProbeDoesNotDownloadWholeMovie()=runTest {
-        val methods=mutableListOf<String>()
+        val methods=java.util.Collections.synchronizedList(mutableListOf<String>())
         val base=HttpClient(MockEngine {r->
             methods+=r.method.value
             if(r.method==HttpMethod.Get) {
@@ -140,9 +140,48 @@ class ProviderContractTest {
         try {
             val item=MediaItem(MediaId("dav","https://dav.test/videos/a.mp4"),"A",path="https://dav.test/videos/a.mp4")
             val plan=provider.resolve(PlaybackRequest(item,DeviceProfile()))
-            assertTrue(plan.seekable);assertEquals(listOf("GET","PROPFIND"),methods)
+            assertTrue(plan.seekable)
+            assertEquals(2, methods.size)
+            assertEquals(setOf("GET","PROPFIND"), methods.toSet())
             assertFailsWith<IllegalArgumentException>{provider.browse("https://dav.test/private/")}
         }finally{provider.close();base.close()}
+    }
+
+    @Test fun davResolveSucceedsWhenDirectoryPropfindForbidden()=runTest {
+        val base=HttpClient(MockEngine {r->
+            if(r.method==HttpMethod.Get) {
+                assertEquals("bytes=0-0",r.headers[HttpHeaders.Range])
+                respond("x",HttpStatusCode.PartialContent,headersOf("Content-Range","bytes 0-0/100"))
+            } else respond("forbidden", HttpStatusCode.Forbidden)
+        })
+        val provider=WebDavProvider(SourceConnection("dav","DAV",SourceKind.WEBDAV,"https://dav.test/videos/"),base,MemorySecrets())
+        try {
+            val item=MediaItem(MediaId("dav","https://dav.test/videos/a.mp4"),"A",path="https://dav.test/videos/a.mp4")
+            val plan=provider.resolve(PlaybackRequest(item,DeviceProfile()))
+            assertTrue(plan.seekable)
+            assertTrue(plan.subtitles.isEmpty())
+        }finally{provider.close();base.close()}
+    }
+
+    @Test fun mediaServerNextEpisodeResolvesNextInSeries()=runTest {
+        val (p, paths)=server(SourceKind.JELLYFIN) { r ->
+            when {
+                r.url.encodedPath.endsWith("AuthenticateByName") -> """{"AccessToken":"t","User":{"Id":"u1"}}"""
+                r.url.encodedPath.endsWith("Items") -> {
+                    assertEquals("series-1", r.url.parameters["ParentId"])
+                    """{"Items":[{"Id":"ep1","Name":"Episode 1","Type":"Episode","SeriesId":"series-1","SeriesName":"Show","ParentIndexNumber":1,"IndexNumber":1},{"Id":"ep2","Name":"Episode 2","Type":"Episode","SeriesId":"series-1","SeriesName":"Show","ParentIndexNumber":1,"IndexNumber":2}],"TotalRecordCount":2}"""
+                }
+                else -> "{}"
+            }
+        }
+        try {
+            p.authenticate(MediaCredentials("u", "p"))
+            val ep1 = p.browse("series-1").items.first()
+            assertEquals("series-1", ep1.seriesKey)
+            val next = p.nextEpisode(ep1)
+            assertEquals("ep2", next?.id?.value)
+            assertTrue(paths.any { it.endsWith("/Users/u1/Items") })
+        } finally { p.close() }
     }
 
 }

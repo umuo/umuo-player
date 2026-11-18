@@ -65,12 +65,15 @@ class Media3Engine(
 
     private var activePlan: PlaybackPlan? = null
     private var activeItemId: MediaId? = null
+    private var activeSeriesKey: String? = null
     private var preservedItemId: MediaId? = null
     private var desiredSpeed = 1f
     private var audioPref: AudioPreference? = null
     private var subtitlePref: SubtitlePreference = SubtitlePreference.Default
     private var appliedAudioPref = false
     private var appliedSubtitlePref = false
+    private var cachedAudioTracks: List<TrackChoice> = emptyList()
+    private var cachedSubtitles: List<TrackChoice> = emptyList()
     private var hadFirstFrame = false
     private var recoveryAttempts = 0
     private var lastRecoveryAt = 0L
@@ -99,8 +102,16 @@ class Media3Engine(
         fromRecovery: Boolean,
         autoPlay: Boolean
     ) {
-        val keepPrefs = (preserveState || fromRecovery) && activeItemId == plan.item.id
-        teardown(resetPreferences = !keepPrefs, resetRecovery = !fromRecovery)
+        val incomingSeriesKey = seriesContinuationKey(plan.item)
+        val sameItem = (preserveState || fromRecovery) && activeItemId == plan.item.id
+        val sameSeries = !sameItem && activeSeriesKey != null && activeSeriesKey == incomingSeriesKey
+        teardown(resetPreferences = !(sameItem || sameSeries), resetRecovery = !fromRecovery)
+        if (sameSeries) {
+            audioPref = audioPref?.copy(id = null)
+            val sp = subtitlePref
+            if (sp is SubtitlePreference.Selected) subtitlePref = sp.copy(id = null)
+        }
+        activeSeriesKey = incomingSeriesKey
         activePlan = plan
         activeItemId = plan.item.id
         prepareAt = SystemClock.elapsedRealtime()
@@ -173,6 +184,7 @@ class Media3Engine(
             }
             override fun onTracksChanged(tracks: Tracks) {
                 applySavedTrackPreferences(exo)
+                rebuildTracks(exo)
                 update(exo)
             }
             override fun onPlayerError(error: PlaybackException) {
@@ -314,13 +326,16 @@ class Media3Engine(
                     }
                 }
                 is SubtitlePreference.Selected -> {
-                    val match = findMatchingTrack(exo, C.TRACK_TYPE_TEXT) { f ->
+                    val primary = findMatchingTrack(exo, C.TRACK_TYPE_TEXT) { f ->
                         (pref.id != null && f.id == pref.id) ||
                             ((f.id in externalSubtitleIds) == pref.external &&
                                 pref.language != null && f.language == pref.language && f.label == pref.label) ||
                             (pref.language != null && f.language == pref.language) ||
                             (pref.label != null && f.label == pref.label)
                     }
+                    val match = primary ?: if (pref.id == null && pref.external) {
+                        findMatchingTrack(exo, C.TRACK_TYPE_TEXT) { f -> f.id in externalSubtitleIds }
+                    } else null
                     if (match != null) {
                         appliedSubtitlePref = true
                         if (!match.first.isTrackSelected(match.second) ||
@@ -353,22 +368,33 @@ class Media3Engine(
         return null
     }
 
-    private fun update(exo: ExoPlayer) {
+    private fun rebuildTracks(exo: ExoPlayer) {
         fun tracks(type: Int): List<TrackChoice> {
             var ordinal = 0
             return exo.currentTracks.groups.flatMapIndexed { g, group ->
-            if(group.type != type) emptyList() else (0 until group.length).filter { group.isTrackSupported(it) }.map { t ->
-                val f = group.getTrackFormat(t)
-                if (type == C.TRACK_TYPE_TEXT) {
-                    val name = subtitleName(f.language, f.label, f.sampleMimeType, ordinal++,
-                        f.id in externalSubtitleIds, f.selectionFlags and C.SELECTION_FLAG_FORCED != 0,
-                        f.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0,
-                        f.roleFlags and C.ROLE_FLAG_CAPTION != 0 || f.roleFlags and C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND != 0)
-                    TrackChoice("$g:$t", name.label, group.isTrackSelected(t), name.detail)
-                } else TrackChoice("$g:$t", f.label ?: listOfNotNull(f.language, f.sampleMimeType).joinToString(" · ").ifBlank { "轨道 ${t+1}" }, group.isTrackSelected(t))
+                if (group.type != type) emptyList() else (0 until group.length).filter { group.isTrackSupported(it) }.map { t ->
+                    val f = group.getTrackFormat(t)
+                    if (type == C.TRACK_TYPE_TEXT) {
+                        val name = subtitleName(
+                            f.language, f.label, f.sampleMimeType, ordinal++,
+                            f.id in externalSubtitleIds, f.selectionFlags and C.SELECTION_FLAG_FORCED != 0,
+                            f.selectionFlags and C.SELECTION_FLAG_DEFAULT != 0,
+                            f.roleFlags and C.ROLE_FLAG_CAPTION != 0 || f.roleFlags and C.ROLE_FLAG_DESCRIBES_MUSIC_AND_SOUND != 0
+                        )
+                        TrackChoice("$g:$t", name.label, group.isTrackSelected(t), name.detail)
+                    } else TrackChoice(
+                        "$g:$t",
+                        f.label ?: listOfNotNull(f.language, f.sampleMimeType).joinToString(" · ").ifBlank { "轨道 ${t + 1}" },
+                        group.isTrackSelected(t)
+                    )
+                }
             }
         }
-        }
+        cachedAudioTracks = tracks(C.TRACK_TYPE_AUDIO)
+        cachedSubtitles = tracks(C.TRACK_TYPE_TEXT)
+    }
+
+    private fun update(exo: ExoPlayer) {
         val pending = pendingSeekPosition
         if (pending != null && seekJob?.isActive != true &&
             (exo.playbackState == Player.STATE_READY || exo.playbackState == Player.STATE_ENDED) &&
@@ -388,8 +414,8 @@ class Media3Engine(
                 positionMs = reportedPosition,
                 durationMs = exo.duration.coerceAtLeast(0),
                 speed = exo.playbackParameters.speed,
-                audioTracks = tracks(C.TRACK_TYPE_AUDIO),
-                subtitles = tracks(C.TRACK_TYPE_TEXT),
+                audioTracks = cachedAudioTracks,
+                subtitles = cachedSubtitles,
                 ended = exo.playbackState == Player.STATE_ENDED,
                 seekable = sourceSeekable && exo.isCurrentMediaItemSeekable
             )
@@ -538,6 +564,7 @@ class Media3Engine(
         val format = select(id, C.TRACK_TYPE_AUDIO) ?: return
         audioPref = AudioPreference(format.language, format.label, format.id)
         appliedAudioPref = true
+        player?.let { rebuildTracks(it); update(it) }
     }
 
     override fun selectSubtitle(id: String?) {
@@ -553,6 +580,7 @@ class Media3Engine(
                     .clearOverridesOfType(C.TRACK_TYPE_TEXT).setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
             }
         }
+        player?.let { rebuildTracks(it); update(it) }
     }
 
     private fun teardown(resetPreferences: Boolean, resetRecovery: Boolean) {
@@ -564,6 +592,8 @@ class Media3Engine(
         player?.release(); currentPlayer.value = null
         http?.shutdownCleanly(); http = null
         pendingSeekPosition = null
+        cachedAudioTracks = emptyList()
+        cachedSubtitles = emptyList()
         if (resetRecovery) {
             hadFirstFrame = false
             recoveryAttempts = 0
@@ -571,6 +601,7 @@ class Media3Engine(
         }
         if (resetPreferences) {
             activeItemId = null
+            activeSeriesKey = null
             desiredSpeed = 1f
             audioPref = null
             subtitlePref = SubtitlePreference.Default
