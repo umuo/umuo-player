@@ -17,4 +17,5 @@ class ScanPreferences(context: Context) {
     fun recordRequest(source: String,time: Long) {prefs.edit().putLong("request:$source",time).apply()}
     fun blockedUntil(source: String): Long = prefs.getLong("blocked:$source",0)
     fun block(source: String,until: Long) {prefs.edit().putLong("blocked:$source",until).apply()}
+    fun clearSource(source: String) { prefs.edit().remove("request:$source").remove("blocked:$source").apply() }
 }

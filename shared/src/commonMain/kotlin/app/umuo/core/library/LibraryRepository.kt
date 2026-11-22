@@ -13,6 +13,14 @@ class LibraryRepository(private val db: UmuoDatabase) {
     fun drafts(): List<SourceConnection> = q.allDrafts().executeAsList().map { wireJson.decodeFromString(it.payload) }
     fun saveDraft(connection: SourceConnection) = q.saveDraft(connection.id, wireJson.encodeToString(connection))
     fun discardDraft(id: String) = q.removeDraft(id)
+    fun removeConnection(id: String) = db.transaction {
+        q.removeConnection(id)
+        q.removeDraft(id)
+        q.clearSourceMedia(id)
+        q.clearSourcePositions(id)
+        q.clearSourceOverrides(id)
+        q.clearSourceQueue(id)
+    }
     fun saveConnection(connection: SourceConnection) {
         val previous = connections().firstOrNull { it.id == connection.id }
         db.transaction {
@@ -43,12 +51,21 @@ class LibraryRepository(private val db: UmuoDatabase) {
             metadataOrigin = if(metadata.hasMetadata) metadata.metadataOrigin else item.metadataOrigin,
             genres = metadata.genres.ifEmpty {item.genres}, tags = metadata.tags.ifEmpty {item.tags}, collection = metadata.collection ?: item.collection,collections=metadata.collections.ifEmpty {metadata.collection?.let {listOf(it)} ?: item.collections})
     }
+    fun positions(source: String): Map<String, Long> =
+        q.allPositions(source).executeAsList().associate { it.media_id to it.milliseconds }
     fun items(source: String): List<MediaItem> = db.transactionWithResult {
         val overrides = overrideMap(source)
+        val pos = positions(source)
         q.allMedia(source).executeAsList().map { row ->
             val item = wireJson.decodeFromString<MediaItem>(row.payload)
-            if (row.media_id in overrides) mergeOverride(item, overrides[row.media_id]) else item
+            val merged = if (row.media_id in overrides) mergeOverride(item, overrides[row.media_id]) else item
+            merged.copy(resumeMs = pos[row.media_id] ?: merged.resumeMs)
         }
+    }
+    fun detailed(item: MediaItem): MediaItem = db.transactionWithResult {
+        val base = applyOverride(indexed(item.id) ?: item)
+        val pos = q.position(item.id.sourceId, item.id.value).executeAsOneOrNull()
+        base.copy(resumeMs = pos ?: base.resumeMs)
     }
     fun updateCached(item: MediaItem) {
         val row=q.byId(item.id.sourceId,item.id.value).executeAsOneOrNull() ?: return

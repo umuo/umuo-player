@@ -235,3 +235,48 @@ Pad 内容页补充：合成剧集单集详情中，「匹配标题」输入返�
   - 工具链与夹具检查：`python3 -m py_compile tools/fixture_server.py tools/qa_android.py` 通过；`tools/fixture_server.py` 在 macOS `$TMPDIR` 符号链接路径下 `PROPFIND` 返回 `207`。
 - 未完成的运行时验证与已知边界：
   - 按用户要求直接推送当前提交，本轮新增的画中画 `RemoteAction`、无黑屏无缝切入画中画、剧集自动/手动连播切换及 TV 端完整 HUD 自动隐藏尚未在 Android 模拟器或真机完成 UI/播放实测与截图审查，不标为运行时通过；真实 NAS / Emby / Jellyfin 服务器、Apple 平台运行时实际播放、HDR 映射及音频直通仍未实测。
+
+## 第三轮使用体验优化与全量验证
+
+- 改动摘要：
+  - **续看与进度管理**：`shared`（`Library.sq` / `LibraryRepository` / `PlaybackCoordinator`）补齐单连接全量清理 `removeConnection`、全库位置映射 `positions(source)`、`detailed(item)` 同步及长片 `>= 95%` 近完播自动清零阈值（`durationMs >= 180_000L` 保护短样片不断点丢失）；移动端与 TV 端详情页展示续看进度条、「继续播放 XX:XX」、「从头播放」与「清除进度」，移动端首页「继续观看」卡片及卡片菜单支持「移除续看记录」，海报/剧集卡与 TV 端首页「继续观看」显示底部进度条与剩看时长/分集信息，退出播放器即时同步最新本地进度。
+  - **剧集浏览与切换**：`MediaServerProvider` 增加 `seriesEpisodes(item)`；移动端剧集页新增快捷续看按钮、多季 `FilterChip` 筛选及 16:9 横向 `EpisodeRowCard`（含分集标题去重 `episodeDisplayTitle`），播放器新增底部「选集」列表；TV 端详情新增快捷续看与播放内焦点式内嵌「选集」条，并在 `PlayerModel` / `CinemaPlayer` / `TvApp` 验证剧集 `下一集` 延续倍速与音轨/字幕偏好。
+  - **本地搜索、目录导航与排序**：`LibraryCatalog` 新增 `CatalogSort`（按标题 / 按年份 / 最近观看）、`PathBreadcrumb` 路径面包屑与 `searchLocal` 本地即时匹配（同时修复 `MobileLibrary` 首字母输入重建 Header slot 导致搜索框失焦的问题，使本地搜索与文件浏览搜索均以稳定 slot 与 `FocusRequester` 保持焦点）；移动端与 TV 端支持 WebDAV 本地库与目录即时检索、排序切换及逐级跳回父目录/根目录。
+  - **播放交互与画中画**：`PlaybackPreferences` 新增并持久化 `VideoScaleMode`（适应 / 铺满 / 拉伸）及 `SubtitleSize`（小 / 标准 / 大 / 特大）/ `subtitleBottomPercent`（3/6/10/14%）；`PlayerSurface` 实时更新 `resizeMode` 与底部 96dp `systemGestureExclusionRects`；`CinemaStyle.timeLabel()` 支持超 1 小时 `H:MM:SS` 格式；移动端新增顶部实时时钟，并收紧 `<480dp` 窄屏播放器双行工具栏；TV 端新增遥控器方向键连按加速寻道 `tvSeekDeltaMs`、媒体快捷键支持及 `TvSettings` 快进间隔 / 字幕大小调节。
+  - **来源生命周期与编辑**：支持安全删除媒体来源及关联 SQLite、Keystore、扫描配置、缩略图缓存与 UI 偏好（移动端经二次确认弹窗 `确认删除`，TV 端在「编辑来源」界面内提供预填编辑、留空保留原密码及两步「删除来源 -> 确认删除此来源」按钮，均只清理本机状态且不修改远程文件）。
+- 单元测试、构建、Lint 与 Apple 编译边界：
+  - `:shared:jvmTest`：60 项通过（0 失败，0 错误，0 跳过；在既有测试基础上新增 `removeConnection` 与 `positions`、长/短片 `isNearCompletion`、`CatalogSort`、`searchLocal` 及 `breadcrumbs` 单测）。
+  - `:playback-media3:testDebugUnitTest`：14 项通过（0 失败，0 错误，0 跳过；在既有测试基础上新增 `tvSeekDeltaMs` 分段加速寻道单测）。
+  - `-PenableAppleTargets=false` 构建与 Lint：`:app-mobile:assembleDebug`（23,626,075 B）、`:app-tv:assembleDebug`（23,869,411 B）、`:app-mobile:lintDebug`、`:app-tv:lintDebug`、`:ui-mobile:lintDebug` 与 `:ui-tv:lintDebug` 均通过（0 errors）。
+  - 临时签名密钥 R8 Release 检查：`:app-mobile:assembleRelease`（3,346,279 B）、`:app-tv:assembleRelease`（3,219,481 B）、`:app-mobile:lintRelease` 与 `:app-tv:lintRelease` 均通过（0 errors），检查后已清理临时密钥与 Release 输出产物。
+  - Apple KMP 编译边界：`:shared:compileKotlinIosSimulatorArm64` 与 `:shared:compileKotlinTvosSimulatorArm64` 编译通过（仅代表共享模块及接口编译边界，不含 Apple 运行时播放器）。
+- API 33 ARM64 模拟器与合成样片运行验证（`Pixel_3a_API_33_arm64-v8a`，本地 `tools/fixture_server.py`，产物存放在已忽略的 `verification/local/ux-optimizations/`）：
+  - **TV 端双源冒烟（`1920x1080` / `240dpi`）**：`tools/qa_android.py --tv` 下 `WEBDAV` 与 `JELLYFIN` 均通过，重点焦点恢复、WebDAV 扫描与字幕选择正常。
+  - **手机端 `JELLYFIN` 冒烟及双端 UX 自动化全流程实测**：
+    - `tools/qa_android.py` 手机端 `JELLYFIN` 首轮冒烟通过（后续单轮重试该固定脚本时，因其第 122 行在模拟器较慢的两次 `uiautomator dump` 之间跨过手机 5s HUD 自动隐藏边界未再重入唤醒而报 `+10 秒` 超时；而带 HUD 唤醒与动态等待的 `scratch/qa_ux_mobile.py` 与 `scratch/qa_ux_tv.py` 已完整实测 WebDAV 电影/剧集播放、`+10 秒` 与所有交互链路）。
+    - **手机端实测与全量 `read_file` 视觉审查（12 张截图 + 首页 `phone-wall.png`）**：确认 WebDAV 首页「继续观看」进度条与右上角「移除续看记录」菜单、详情页进度条 / 「继续播放」 / 「从头播放」（从 `< 0:08` 重启） / 「清除进度」、播放器顶栏时钟、外挂 `.srt` 字幕与 4 档字幕大小/底部位置、画面缩放循环、无缝切入 16:9 画中画（`mode=pinned` + `PIP_CONTROL` 广播切换）、本地搜索 `"Arrival"` 全程 `focused="true"` 并过滤为 `"1 部"`、WebDAV `Series` 面包屑跳回根目录、剧集卡片（含修复重复 `"第 1 集 · 第 1 集"` 为 `"第 1 集"`）与「选集」弹窗、`1.5×` 倍速跨「下一集」延续、`720x1520`/`360dpi`（`320dp` 窄屏）工具栏无溢出及确认弹窗删除 `FixtureJELLYFIN`；`logcat -b crash` 无崩溃。
+    - **TV 端 D-pad 焦点实测与全量 `read_file` 视觉审查（7 张截图 + `smoke-tv/` 截图）**：在 `1920x1080` / `240dpi` 下经由 `TAB`/`DPAD` 遥控焦点确认 TV 首页「继续观看」缩略图进度条与「剩余 1 分钟」、详情页续看/从头/清除进度、本地搜索 `"Arrival"` 过滤至 `"1 部内容"` 并清除、WebDAV `Series` 面包屑跳回、剧集播放器 >5s 无操作 HUD 完整自动隐藏、`KEYCODE_MEDIA_PLAY_PAUSE` 唤醒、「画面：铺满」切换、内嵌聚焦式「选集」行与 `KEYCODE_MEDIA_FAST_FORWARD` 响应、「编辑来源」表单预填与两步「删除来源 -> 确认删除此来源」删除 `FixtureJELLYFIN`，以及 `TvSettings` 单次快进 `30 秒` 与 `字幕 大` 切换；`logcat -b crash` 无崩溃。
+- 未完成的验证与已知边界：
+  - 上述运行验证与前两轮均基于本机 `tools/fixture_server.py` 合成测试样片，**不代表**真实 NAS / WebDAV / Jellyfin / Emby 生产服务器的协议、认证、转码及长片兼容结论；Apple（iOS/tvOS）框架与 SwiftUI 壳仅验证了 `:shared` 的 KMP 模拟器编译边界，Apple 运行时实际播放、HDR 映射（HLG/PQ/Dolby Vision）及音频直通（eAC3/TrueHD/DTS）均未实测，均不标为通过。
+  - 验证完成后已终止模拟器与临时服务器，清理 `${TMPDIR:-/tmp}/umuo-fixture`、`verification/local/` 以外临时包及测试密钥，原始截图与日志保留在 Git 忽略目录 `verification/local/ux-optimizations/`。
+
+## 第四轮 UI 视觉层次与交互细节优化与全量验证
+
+- 改动摘要：
+  - `shared`：新增纯 Kotlin 规格徽章解析器 `MediaSpecs`（基于媒体文件名/容器提取分辨率、`DV`/`HDR`、编码、音轨与 `NFO`/`TMDB` 来源标签）及 `MediaSpecsTest`。
+  - `playback-media3`：`CinemaArtwork` 增加 `crossfade(220)` 与渐变兜底占位；`PlaybackPreferences` 与 `SubtitleAppearance` 新增并持久化 `SubtitleBackground`（`透明描边` / `半透黑底` / `暖黄字幕`）；`PlayerSurface` 新增 `GestureKind`、`900ms` 连续双击累加寻道及 `onHoldBoostChanged` 常驻长按倍速状态回调；`PlayerModel` 新增 `BrowserState.refreshing` 与 `refreshCurrent()`。
+  - `ui-mobile`：`MobileApp` 为页面切换添加 `AnimatedContent` 过渡，重构 `CinemaDetail`（手机 `290.dp` 头图叠加 `84.dp` 2:3 嵌套海报、规格徽章胶囊与 `Surface` 续看卡；`>=840dp` 平板采用顶部环境条与居中小宽双栏布局）并将 `MetadataSettings` 收整为三张 `Surface` 分组卡（含默认字幕样式选择与图标化手势速查）；`MobileHome` 增加精选 crossfade、卡片 `0.5.dp` 细边框、`⋮` 菜单 `44.dp` 触控热区及 WebDAV 单集「查看整部剧集」；`MobileLibrary` 增加 `PullToRefreshBox` 下拉刷新、扫描中/待恢复横幅（含停止/恢复入口）及缩略图细边框；`ConnectionEditor` 限制表单最大宽度 `620.dp` 并展示 HTTPS 锁 / HTTP 警示地址预览胶囊；`CinemaPlayer` 新增顶部常驻长按倍速胶囊、分类图标与细边框的手势反馈浮层、拖动放大滑块（`16.dp`）+ 时间偏移预览气泡、`字幕样式` 切换芯片以及 2×2 诊断指标卡。
+  - `ui-tv`：`TvApp` 为首页「继续观看」与媒体库网格卡片统一添加 `1.04×` 焦点放大与 `2.dp` 琥珀强调边框（未聚焦为 `1.dp` `Cinema.Border`）；首页「继续观看」卡片支持长按确认键 / `Menu` 键呼出居中快捷操作弹窗（继续播放 / 从头播放 / 影片详情 / 移除续看记录）；`TvDetail` 海报增加边框并渲染 `MediaSpecs` 规格徽章；`TvCinemaPlayer` 将音轨与字幕清单重构为可折叠二级聚焦行并保留焦点回溯；`TvSettings` 增加 `SubtitleBackground` 样式行。
+- 单元测试、构建、Lint 与 Apple 编译边界：
+  - `:shared:jvmTest`：62 项通过（11 个测试文件，0 失败，0 错误，0 跳过；含新增 `MediaSpecsTest`）。
+  - `:playback-media3:testDebugUnitTest`：15 项通过（2 个测试文件，0 失败，0 错误，0 跳过；含新增 `subtitleBackgroundAndScaleModesHaveReadableLabels` 单测）。
+  - `-PenableAppleTargets=false` 构建与 Lint：`:app-mobile:assembleDebug`（23,670,830 B）、`:app-tv:assembleDebug`（23,895,092 B）、`:app-mobile:lintDebug`、`:app-tv:lintDebug`、`:ui-mobile:lintDebug` 与 `:ui-tv:lintDebug` 均通过（0 errors）。
+  - 临时签名密钥 R8 Release 检查：`:app-mobile:assembleRelease`（3,395,431 B）、`:app-tv:assembleRelease`（3,235,865 B）、`:app-mobile:lintRelease` 与 `:app-tv:lintRelease` 均通过（0 errors），校验后已清理临时密钥与 Release 测试 APK。
+  - Apple KMP 编译边界：`:shared:compileKotlinIosSimulatorArm64` 与 `:shared:compileKotlinTvosSimulatorArm64` 编译通过（仅代表共享核心及接口编译边界，不含 Apple 端实际运行与播放）。
+- API 33 ARM64 模拟器与合成样片运行验证（`Pixel_3a_API_33_arm64-v8a`，本机 `tools/fixture_server.py`，截图位于已忽略的 `verification/local/ui-polish/`）：
+  - **TV 基线冒烟（`1920x1080`）**：`tools/qa_android.py --tv` 下 `WEBDAV` 与 `JELLYFIN` 均通过（启动期间清理冷启 System UI 无响应弹窗后恢复稳定）。
+  - **手机与平板端交互及 11 张截图 `read_file` 审查**：实测验证连接表单地址自动拆分与 HTTP 地址预览胶囊（`phone-connection-preview.png`）、扫描进行中进度横幅与停止按钮（`phone-scan-banner-refresh.png`）、详情页嵌套海报与 `MP4`/`NFO` 规格徽章（`phone-detail-poster-specs.png`）、`1920x1200`/`240dpi`（`>=840dp`）平板导航轨与双栏详情页（`tablet-detail-twocolumn.png`）、播放器右半区连续双击累加 `+20s`（`phone-player-doubletap.png`）、长按顶部常驻 `2.0× 倍速播放中` 胶囊（`phone-player-hold-boost.png`）、进度条拖拽 `0:14 -6s` 预览气泡与放大滑块（`phone-player-scrub-bubble.png`）、`半透黑底` / `暖黄字幕` 等字幕样式面板（`phone-player-subtitle-styles.png`）、2×2 诊断指标卡（`phone-player-diagnostics.png`，`首帧耗时 1534 ms`、`定位耗时 1381 ms`、`支持定位`、`已就绪`）以及设置页三张分组卡片与手势图例（`phone-settings-cards.png`、`phone-settings-cards-bottom.png`）；`logcat -b crash` 无崩溃。
+  - **TV 端 D-pad 焦点及 5 张新截图（含 3 张基线截图）`read_file` 审查**：在 `1920x1080`/`240dpi` 下验证「继续观看」卡片 `1.04×` 放大与 `2.dp` 琥珀高亮边框及媒体库卡片 `1.dp` 边框（`tv-home-focus-border.png`）、遥控器 `KEYCODE_MENU` 呼出续看快捷操作弹窗并跳转「影片详情」（`tv-home-context-menu.png`）、TV 详情页海报边框与 `MP4`/`NFO` 徽章及续看进度（`tv-detail-specs.png`）、TV 播放器主控栏精简与按 `字幕` 展开含 `✓ 关闭字幕` / `ASS` / `SRT` / `VTT` / `样式：透明描边` 的可折叠二级聚焦行（`tv-player-collapsible-subtitles.png`）及设置页字幕背景样式切换（`tv-settings-subtitle-style.png`）；`logcat -b crash` 无崩溃。
+- 未完成的验证与已知边界：
+  - 本轮所有运行时与播放验证均基于本机 `tools/fixture_server.py` 合成测试样片，**不代表**真实 NAS / WebDAV / Jellyfin / Emby 服务器兼容性结论；Apple（iOS/tvOS）端实际播放、HDR 映射（HLG/PQ/Dolby Vision）及音频直通（eAC3/TrueHD/DTS）均未实测，均不标为通过。
+  - 验证结束后已 reset 模拟器分辨率/DPI、关闭 `emulator-5554` 与后台夹具服务进程，并清理 `${TMPDIR:-/tmp}/umuo-fixture`、测试 Release 包与临时签名密钥。

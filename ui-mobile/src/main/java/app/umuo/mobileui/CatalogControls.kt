@@ -17,16 +17,22 @@ import app.umuo.core.library.*
 import app.umuo.core.model.*
 
 @Composable
-internal fun CatalogControls(state: BrowserState, onFilter: (CatalogFilter) -> Unit, embedded: Boolean = false) {
+internal fun CatalogControls(
+    state: BrowserState,
+    onFilter: (CatalogFilter) -> Unit,
+    onSort: (CatalogSort) -> Unit = {},
+    embedded: Boolean = false
+) {
     val filter=state.catalogFilter
     var expanded by rememberSaveable(state.connection?.id) {mutableStateOf(false)}
     val facets=remember(state.catalogItems,filter) {LibraryCatalog.facets(state.catalogItems,filter)}
     val summary=listOfNotNull(if(filter.type==CatalogType.MOVIES)"电影" else if(filter.type==CatalogType.SERIES)"剧集" else null,
-        filter.genre?.let {"类型：$it"},filter.tag?.let {"标签：$it"},filter.collection?.let {"合集：$it"}).joinToString(" · ")
+        filter.genre?.let {"类型：$it"},filter.tag?.let {"标签：$it"},filter.collection?.let {"合集：$it"},
+        state.catalogSort.takeIf { it != CatalogSort.TITLE }?.label).joinToString(" · ")
     Column(verticalArrangement=Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
             if(!embedded)TextButton(onClick={expanded=!expanded}) {Text(if(expanded)"收起筛选" else "展开筛选")}
-            Text(if(filter.active)summary else "全部已刮削影视",modifier=Modifier.weight(1f),color=MobileStyle.Muted,fontSize=12.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
+            Text(if(summary.isNotEmpty())summary else "全部已刮削影视",modifier=Modifier.weight(1f),color=MobileStyle.Muted,fontSize=12.sp,maxLines=1,overflow=TextOverflow.Ellipsis)
             if(filter.active)TextButton(onClick={onFilter(CatalogFilter())}) {Text("清除")}
         }
         AnimatedVisibility(embedded || expanded) {
@@ -34,6 +40,16 @@ internal fun CatalogControls(state: BrowserState, onFilter: (CatalogFilter) -> U
                 LazyRow(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                     items(CatalogType.entries) {type->
                         FilterChip(selected=filter.type==type,onClick={onFilter(filter.copy(type=type))},label={Text(when(type) {CatalogType.ALL->"全部影视";CatalogType.MOVIES->"电影";CatalogType.SERIES->"剧集"})})
+                    }
+                }
+                Text("排序", color = MobileStyle.Muted, fontSize = 11.sp)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(CatalogSort.entries) { sortOption ->
+                        FilterChip(
+                            selected = state.catalogSort == sortOption,
+                            onClick = { onSort(sortOption) },
+                            label = { Text(sortOption.label) }
+                        )
                     }
                 }
                 CatalogFacet("类型",facets.genres,filter.genre) {onFilter(filter.copy(genre=it))}

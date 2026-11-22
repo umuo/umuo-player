@@ -14,6 +14,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
@@ -37,8 +39,16 @@ import app.umuo.core.source.mediaserver.ServerView
     val dav = state.connection?.kind == SourceKind.WEBDAV
     var menu by remember { mutableStateOf(false) }
     var searching by rememberSaveable(state.connection?.id) { mutableStateOf(false) }
-    var query by rememberSaveable(state.connection?.id, state.serverSearch) { mutableStateOf(state.serverSearch) }
+    var localQuery by rememberSaveable(state.connection?.id) { mutableStateOf(state.localSearch) }
+    var serverQuery by rememberSaveable(state.connection?.id, state.serverSearch) { mutableStateOf(state.serverSearch) }
+    val searchFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(state.localSearch) {
+        if (state.localSearch != localQuery) localQuery = state.localSearch
+    }
+    LaunchedEffect(searching, dav) {
+        if (searching && dav) runCatching { searchFocus.requestFocus() }
+    }
     fun navigate(action: () -> Unit) { menu = false; onNavigate(); action() }
     val tabs = listOf("精选", "电影", "剧集")
     val selectedTab = when {
@@ -79,8 +89,12 @@ import app.umuo.core.source.mediaserver.ServerView
                 Icon(Icons.Rounded.Tune, if (filters) "收起筛选" else "展开筛选",
                     tint = if (state.catalogFilter.active || filters) MobileStyle.Accent else MobileStyle.Muted)
             }
-            if (!dav) IconButton(onClick = { searching = !searching }) {
-                Icon(Icons.Rounded.Search, "搜索当前服务器", tint = MobileStyle.Muted)
+            if (dav) IconButton(onClick = { searching = !searching }) {
+                Icon(Icons.Rounded.Search, "搜索本地影视库",
+                    tint = if (searching || state.localSearch.isNotBlank()) MobileStyle.Accent else MobileStyle.Muted)
+            } else IconButton(onClick = { searching = !searching }) {
+                Icon(Icons.Rounded.Search, "搜索当前服务器",
+                    tint = if (searching || state.serverSearch.isNotBlank()) MobileStyle.Accent else MobileStyle.Muted)
             }
             if (!dav) Box {
                 IconButton(onClick = { menu = true }) { Icon(Icons.Rounded.MoreHoriz, "媒体库选项", tint = MobileStyle.Muted) }
@@ -92,21 +106,49 @@ import app.umuo.core.source.mediaserver.ServerView
             }
         }
         if (dav && state.wall && state.series == null && filters) Box(Modifier.padding(horizontal = horizontalPadding)) {
-            CatalogControls(state, model::filterCatalog, embedded = true)
+            CatalogControls(state, model::filterCatalog, model::setCatalogSort, embedded = true)
+        }
+        if (dav && (searching || state.localSearch.isNotBlank())) {
+            OutlinedTextField(
+                value = localQuery,
+                onValueChange = {
+                    localQuery = it
+                    model.setLocalSearch(it)
+                },
+                label = { Text("搜索本地影视库") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = horizontalPadding)
+                    .padding(bottom = 10.dp)
+                    .focusRequester(searchFocus),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+                trailingIcon = {
+                    if (localQuery.isNotBlank() || state.localSearch.isNotBlank() || searching) {
+                        IconButton(onClick = {
+                            keyboard?.hide()
+                            localQuery = ""
+                            searching = false
+                            model.clearLocalSearch()
+                        }) { Icon(Icons.Rounded.Close, "清除搜索") }
+                    }
+                }
+            )
         }
         if (!dav && (searching || state.serverSearch.isNotBlank())) {
             OutlinedTextField(
-                query, { query = it }, label = { Text("搜索当前服务器") }, singleLine = true,
+                serverQuery, { serverQuery = it }, label = { Text("搜索当前服务器") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = horizontalPadding).padding(bottom = 10.dp),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); navigate { model.searchServer(query) } }),
+                keyboardActions = KeyboardActions(onSearch = { keyboard?.hide(); navigate { model.searchServer(serverQuery) } }),
                 trailingIcon = {
                     Row {
-                        IconButton(onClick = { keyboard?.hide(); navigate { model.searchServer(query) } }, enabled = !state.busy) {
+                        IconButton(onClick = { keyboard?.hide(); navigate { model.searchServer(serverQuery) } }, enabled = !state.busy) {
                             Icon(Icons.Rounded.Search, "搜索影视")
                         }
                         IconButton(onClick = {
-                            keyboard?.hide(); query = ""; searching = false
+                            keyboard?.hide(); serverQuery = ""; searching = false
                             if (state.serverSearch.isNotBlank()) navigate { model.clearServerSearch() }
                         }) { Icon(Icons.Rounded.Close, "清除搜索") }
                     }

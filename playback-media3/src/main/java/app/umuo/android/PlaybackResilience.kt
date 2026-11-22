@@ -108,3 +108,14 @@ internal fun shouldAutoRecoverCode(
         else -> true
     }
 }
+
+fun tvSeekDeltaMs(baseSeconds: Int, repeatCount: Int): Long {
+    val base = baseSeconds.coerceIn(5, 60)
+    val stepSeconds = when {
+        repeatCount <= 0 -> base
+        repeatCount <= 4 -> maxOf(base * 2, 20)
+        repeatCount <= 12 -> maxOf(base * 3, 30)
+        else -> 60
+    }
+    return stepSeconds * 1_000L
+}

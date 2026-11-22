@@ -22,16 +22,26 @@ import java.util.UUID
  data class BrowserState(
     val connections: List<SourceConnection> = emptyList(), val drafts: List<SourceConnection> = emptyList(), val connection: SourceConnection? = null,
     val items: List<MediaItem> = emptyList(), val recent: List<MediaItem> = emptyList(), val selected: MediaItem? = null,
-    val busy: Boolean = false, val error: String? = null, val failedItem: MediaItem? = null, val failureKind: PlaybackFailureKind? = null, val warning: String? = null,
+    val busy: Boolean = false, val refreshing: Boolean = false, val error: String? = null, val failedItem: MediaItem? = null, val failureKind: PlaybackFailureKind? = null, val warning: String? = null,
     val parent: String? = null, val nextOffset: Int? = null, val wall: Boolean = false,
     val serverType: MediaKind? = null,
     val serverView: ServerView = ServerView.LIBRARIES, val serverSearch: String = "", val userActionBusy: Boolean = false,
     val catalogItems: List<MediaItem> = emptyList(), val catalogFilter: CatalogFilter = CatalogFilter(),
+    val catalogSort: CatalogSort = CatalogSort.TITLE, val localSearch: String = "",
+    val directoryFiles: List<MediaItem> = emptyList(),
     val series: String? = null, val tmdbEnabled: Boolean = false,
     val metadataCandidates: List<MediaItem> = emptyList(), val playing: MediaItem? = null,
+    val seriesEpisodes: List<MediaItem> = emptyList(),
     val nextEpisode: MediaItem? = null
 ) {
-    val showHomeSections: Boolean get() = (wall || parent==null) && series==null && selected==null && (!wall || !catalogFilter.active) && serverView==ServerView.LIBRARIES && serverSearch.isBlank()
+    val breadcrumbs: List<PathBreadcrumb>
+        get() = if (connection?.kind == SourceKind.WEBDAV && !wall) {
+            LibraryCatalog.breadcrumbs(connection.baseUrl, parent)
+        } else emptyList()
+    val currentFolderTitle: String? get() = if (parent != null) breadcrumbs.lastOrNull()?.label else null
+    val showHomeSections: Boolean
+        get() = (wall || parent==null) && series==null && selected==null && (!wall || !catalogFilter.active) &&
+            serverView==ServerView.LIBRARIES && serverSearch.isBlank() && localSearch.isBlank()
     val inServerSubview: Boolean get() = connection?.kind?.let {it!=SourceKind.WEBDAV}==true && (serverView!=ServerView.LIBRARIES || serverSearch.isNotBlank())
     val seriesTitle: String? get() = series?.let {key->catalogItems.firstOrNull {it.seriesKey==key}?.title ?: key}
     val visibleRecent: List<MediaItem> get() = if(wall) recent.filter {it.hasMetadata} else recent
@@ -58,7 +68,16 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     fun hasActiveConnection(id: String): Boolean = library.connections().any {it.id==id}
     private fun refreshConnections() { mutable.update {it.copy(connections=displayedConnections(),drafts=library.drafts())} }
     fun discardDraft(id: String) { library.discardDraft(id); secrets.remove("draft:$id:password");secrets.remove("draft:$id:token");refreshConnections();clearMessage() }
-    private val mutable = MutableStateFlow(BrowserState(connections = displayedConnections(),drafts=library.drafts(), tmdbEnabled = secrets.read("tmdb:enabled") == "true"))
+    private val mutable = MutableStateFlow(
+        BrowserState(
+            connections = displayedConnections(),
+            drafts = library.drafts(),
+            tmdbEnabled = secrets.read("tmdb:enabled") == "true",
+            catalogSort = runCatching {
+                CatalogSort.valueOf(uiPreferences.getString("catalogSort", null).orEmpty())
+            }.getOrDefault(CatalogSort.TITLE)
+        )
+    )
     val state = mutable.asStateFlow()
     val scanner = LibraryScanner(library)
     val engine: Media3Engine = Media3Engine(application, viewModelScope, { id -> mutable.value.connections.firstOrNull { it.id == id } }, secrets) { posMs ->
@@ -74,6 +93,7 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     private var userActionJob: Job? = null
     private var serverHomeJob: Job? = null
     private var preSearchServerView: ServerView? = null
+    @Volatile private var cachedWallAll: List<MediaItem> = emptyList()
     private val history = mutableListOf<String?>()
     private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -137,9 +157,18 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     private suspend fun activate(source: MediaSourceProvider, c: SourceConnection) {
         scanJob?.cancel();userActionJob?.cancel();serverHomeJob?.cancel();nextEpisodeJob?.cancel();provider?.close(); provider = source; history.clear()
         preSearchServerView = null
+        cachedWallAll = emptyList()
         uiPreferences.edit().putString("source",c.id).apply()
         val recentList = withContext(Dispatchers.IO) { library.recent(c.id) }
-        mutable.update { it.copy(connection = c, serverType=null,serverView=ServerView.LIBRARIES,serverSearch="",userActionBusy=false,parent = null, selected = null, items = emptyList(), recent = recentList, wall = false, catalogFilter=CatalogFilter(),catalogItems=emptyList(),series = null, nextOffset = null, error = null,warning=null, nextEpisode = null) }
+        mutable.update {
+            it.copy(
+                connection = c, serverType = null, serverView = ServerView.LIBRARIES, serverSearch = "",
+                localSearch = "", directoryFiles = emptyList(), userActionBusy = false, parent = null,
+                selected = null, items = emptyList(), recent = recentList, wall = false,
+                catalogFilter = CatalogFilter(), catalogItems = emptyList(), series = null,
+                nextOffset = null, refreshing = false, error = null, warning = null, seriesEpisodes = emptyList(), nextEpisode = null
+            )
+        }
     }
     fun selectConnection(c: SourceConnection) {
         if(state.value.playing != null) return
@@ -167,11 +196,13 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     private suspend fun applyPage(source: MediaSourceProvider, page: MediaPage, parent: String?, offset: Int = 0) {
         val (display, recentList) = withContext(Dispatchers.IO) {
             library.transactionWithResult {
+                val pos = if (source is WebDavProvider) library.positions(source.connection.id) else emptyMap()
                 val items = page.items.map { item ->
                     if(source is WebDavProvider) {
                         val cached=library.indexed(item.id)
                         if(cached==null && !item.isFolder) library.upsert(item,parent ?: source.connection.baseUrl)
-                        library.applyOverride(cached ?: item)
+                        val merged = library.applyOverride(cached ?: item)
+                        merged.copy(resumeMs = pos[item.id.value] ?: merged.resumeMs)
                     } else {
                         if(!item.isFolder) library.upsert(item, parent.orEmpty())
                         item
@@ -180,9 +211,17 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
                 items to library.recent(source.connection.id)
             }
         }
-        mutable.update { it.copy(items = (if(offset == 0) emptyList() else it.items) + display,
-            recent = recentList,
-            parent = parent, nextOffset = page.nextOffset, selected = null) }
+        mutable.update { current ->
+            val combined = (if (offset == 0) emptyList() else current.directoryFiles) + display
+            current.copy(
+                items = if (offset == 0) display else current.items + display,
+                directoryFiles = combined,
+                recent = recentList,
+                parent = parent,
+                nextOffset = page.nextOffset,
+                selected = null
+            )
+        }
         if(parent==null && offset==0)refreshServerHome()
     }
     private fun refreshServerHome() {
@@ -210,16 +249,14 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
         if(item != null && !item.isFolder) {
             browseJob?.cancel()
             browseJob = viewModelScope.launch {
-                val detailed = withContext(Dispatchers.IO) {
-                    library.applyOverride(library.indexed(item.id) ?: item)
-                }
+                val detailed = withContext(Dispatchers.IO) { library.detailed(item) }
                 mutable.update { it.copy(selected = detailed, metadataCandidates = emptyList()) }
             }
             return
         }
         browseJob?.cancel()
         browseJob = viewModelScope.launch {
-            mutable.update { it.copy(busy = true, error = null) }
+            mutable.update { it.copy(busy = true, error = null, localSearch = if (!more) "" else it.localSearch) }
             val oldParent = state.value.parent
             try {
                 loadPage(if(more) oldParent else item?.id?.value, if(more) state.value.nextOffset ?: 0 else 0)
@@ -232,7 +269,7 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     fun home() {
         if(state.value.playing!=null || provider==null)return
         if(state.value.wall) {
-            mutable.update {it.copy(catalogFilter=CatalogFilter())}
+            mutable.update {it.copy(catalogFilter=CatalogFilter(), localSearch="")}
             showWall()
             return
         }
@@ -245,7 +282,7 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
         browseJob=viewModelScope.launch {
             previous?.join()
             history.clear()
-            mutable.update {it.copy(parent=null,series=null,selected=null,wall=false,catalogFilter=CatalogFilter(),catalogItems=emptyList(),nextOffset=null,items=emptyList(),busy=true,error=null,failedItem=null,failureKind=null)}
+            mutable.update {it.copy(parent=null,series=null,selected=null,wall=false,catalogFilter=CatalogFilter(),catalogItems=emptyList(),localSearch="",directoryFiles=emptyList(),nextOffset=null,items=emptyList(),busy=true,error=null,failedItem=null,failureKind=null)}
             try {loadPage(null)}
             catch(e: CancellationException){throw e}
             catch(e: Exception){mutable.update {it.copy(error=safeMessage(e))}}
@@ -255,6 +292,7 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     fun back() {
         if(state.value.playing != null) { stop(); return }
         if(state.value.selected != null) { if(state.value.wall) showWall(state.value.series) else mutable.update { it.copy(selected = null, metadataCandidates = emptyList()) }; return }
+        if(state.value.localSearch.isNotBlank()) { clearLocalSearch(); return }
         if(state.value.series != null) { showWall(); return }
         if(state.value.wall) {showFiles();return}
         if(history.isNotEmpty() && !state.value.busy) {
@@ -269,6 +307,61 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
             clearServerSearch()
         } else if(provider is MediaServerProvider && state.value.serverView!=ServerView.LIBRARIES) {
             showServerView(ServerView.LIBRARIES)
+        }
+    }
+    fun jumpToDirectory(targetParent: String?) {
+        val c = state.value.connection ?: return
+        if (c.kind != SourceKind.WEBDAV || state.value.playing != null) return
+        if (targetParent == state.value.parent && state.value.localSearch.isBlank()) return
+        browseJob?.cancel()
+        browseJob = viewModelScope.launch {
+            mutable.update { it.copy(busy = true, error = null, localSearch = "") }
+            try {
+                if (targetParent == null) {
+                    history.clear()
+                } else {
+                    val crumbs = LibraryCatalog.breadcrumbs(c.baseUrl, targetParent)
+                    history.clear()
+                    crumbs.dropLast(1).forEach { history += it.path }
+                }
+                loadPage(targetParent, 0)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                mutable.update { it.copy(error = safeMessage(e)) }
+            } finally {
+                mutable.update { it.copy(busy = false) }
+            }
+        }
+    }
+    fun refreshCurrent() {
+        val snapshot = state.value
+        val c = snapshot.connection ?: return
+        val source = provider ?: return
+        if (snapshot.playing != null || snapshot.busy || snapshot.refreshing) return
+        browseJob?.cancel()
+        browseJob = viewModelScope.launch {
+            mutable.update { it.copy(refreshing = true, error = null) }
+            try {
+                if (source is WebDavProvider && snapshot.wall) {
+                    loadWall(c, snapshot.series)
+                } else {
+                    loadPage(snapshot.parent, 0)
+                    if (source is MediaServerProvider &&
+                        snapshot.parent == null &&
+                        snapshot.serverView == ServerView.LIBRARIES &&
+                        snapshot.serverSearch.isBlank()
+                    ) {
+                        refreshServerHome()
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                mutable.update { it.copy(error = safeMessage(e)) }
+            } finally {
+                mutable.update { it.copy(refreshing = false, busy = false) }
+            }
         }
     }
     fun showServerCatalog(type: MediaKind?) = showServerView(when(type) {MediaKind.MOVIE->ServerView.MOVIES;MediaKind.SERIES->ServerView.SERIES;else->ServerView.LIBRARIES})
@@ -341,20 +434,46 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
             finally {if(state.value.connection?.id==item.id.sourceId)mutable.update {it.copy(userActionBusy=false)}}
         }
     }
+    private fun computeWallItems(
+        catalog: List<MediaItem>,
+        all: List<MediaItem>,
+        recent: List<MediaItem>,
+        filter: CatalogFilter,
+        series: String?,
+        sort: CatalogSort,
+        search: String
+    ): List<MediaItem> {
+        val base = if (series != null) {
+            LibraryCatalog.episodes(all, series)
+        } else {
+            LibraryCatalog.sort(LibraryCatalog.filter(catalog, filter), sort, recent.map { it.id }, all)
+        }
+        return LibraryCatalog.searchLocal(base, search)
+    }
     private suspend fun loadWall(c: SourceConnection, series: String? = null) {
         uiPreferences.edit().putBoolean("catalog:${c.id}",true).apply()
         val filter = if(state.value.wall) state.value.catalogFilter else CatalogFilter()
-        val (catalog, items, recentList) = withContext(Dispatchers.IO) {
+        val sort = state.value.catalogSort
+        val search = if (state.value.wall && state.value.series == series) state.value.localSearch else ""
+        val result = withContext(Dispatchers.IO) {
             val all = library.items(c.id)
             val recentItems = library.recent(c.id)
             withContext(Dispatchers.Default) {
                 val cat = LibraryCatalog.entries(all)
-                val filtered = if(series!=null) LibraryCatalog.episodes(all,series) else LibraryCatalog.filter(cat,filter)
-                Triple(cat, filtered, recentItems)
+                val filtered = computeWallItems(cat, all, recentItems, filter, series, sort, search)
+                Triple(all, cat, filtered) to recentItems
             }
         }
         if(state.value.connection?.id != c.id) return
-        mutable.update { it.copy(wall=true,parent=null,catalogItems=catalog,catalogFilter=filter,items=items,recent=recentList,nextOffset=null,selected=null,series=series,busy=false,error=null) }
+        val (triple, recentList) = result
+        cachedWallAll = triple.first
+        mutable.update {
+            it.copy(
+                wall = true, parent = null, catalogItems = triple.second, catalogFilter = filter,
+                localSearch = search, items = triple.third, recent = recentList, nextOffset = null,
+                selected = null, series = series, busy = false, error = null
+            )
+        }
     }
     fun showWall(series: String? = null) {
         val c = state.value.connection ?: return
@@ -366,12 +485,65 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
     }
     fun filterCatalog(filter: CatalogFilter) {
         if(!state.value.wall || state.value.series!=null)return
-        mutable.update {it.copy(catalogFilter=filter,items=LibraryCatalog.filter(it.catalogItems,filter))}
+        mutable.update {
+            it.copy(
+                catalogFilter = filter,
+                items = computeWallItems(it.catalogItems, cachedWallAll, it.recent, filter, null, it.catalogSort, it.localSearch)
+            )
+        }
     }
+    fun setCatalogSort(sort: CatalogSort) {
+        uiPreferences.edit().putString("catalogSort", sort.name).apply()
+        mutable.update {
+            if (!it.wall || it.series != null) {
+                it.copy(catalogSort = sort)
+            } else {
+                it.copy(
+                    catalogSort = sort,
+                    items = computeWallItems(it.catalogItems, cachedWallAll, it.recent, it.catalogFilter, null, sort, it.localSearch)
+                )
+            }
+        }
+    }
+    fun setLocalSearch(query: String) {
+        val current = state.value
+        val c = current.connection ?: return
+        if (c.kind != SourceKind.WEBDAV) return
+        if (current.wall) {
+            mutable.update {
+                it.copy(
+                    localSearch = query,
+                    items = computeWallItems(it.catalogItems, cachedWallAll, it.recent, it.catalogFilter, it.series, it.catalogSort, query)
+                )
+            }
+            return
+        }
+        if (query.isBlank()) {
+            mutable.update { it.copy(localSearch = "", items = it.directoryFiles) }
+            return
+        }
+        val currentFiles = current.directoryFiles
+        mutable.update { it.copy(localSearch = query) }
+        browseJob?.cancel()
+        browseJob = viewModelScope.launch {
+            val results = withContext(Dispatchers.IO) {
+                val indexed = library.items(c.id).filter { !it.isFolder }
+                val pool = (currentFiles + indexed).distinctBy { it.id }
+                withContext(Dispatchers.Default) {
+                    LibraryCatalog.searchLocal(pool, query)
+                }
+            }
+            if (state.value.connection?.id == c.id && !state.value.wall && state.value.localSearch == query) {
+                mutable.update { it.copy(items = results) }
+            }
+        }
+    }
+    fun clearLocalSearch() = setLocalSearch("")
     fun showFiles() {
         if(state.value.busy)return
         state.value.connection?.id?.let {uiPreferences.edit().putBoolean("catalog:$it",false).apply()}
-        mutable.update {it.copy(wall=false,series=null,catalogFilter=CatalogFilter(),catalogItems=emptyList())}
+        cachedWallAll = emptyList()
+        mutable.update {it.copy(wall=false,series=null,catalogFilter=CatalogFilter(),catalogItems=emptyList(),localSearch="")}
         home()
     }
 
@@ -419,27 +591,145 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
         if (playJob?.isActive == true) return
         play(next, compatible = lastCompatible, resumeOverride = 0L)
     }
-    private suspend fun resolveNextEpisode(
+    fun clearProgress(item: MediaItem) {
+        val source = provider ?: return
+        viewModelScope.launch {
+            val recentList = withContext(Dispatchers.IO) {
+                if (source is MediaServerProvider && item.id.sourceId == source.connection.id) {
+                    runCatching { source.setWatched(item.id, false) }
+                }
+                library.savePosition(item.id, 0L)
+                library.recent(item.id.sourceId)
+            }
+            if (state.value.connection?.id != item.id.sourceId) return@launch
+            fun clearItem(entry: MediaItem): MediaItem =
+                if (entry.id == item.id) entry.copy(resumeMs = 0L, watched = if (source is MediaServerProvider) false else entry.watched)
+                else entry
+            cachedWallAll = cachedWallAll.map(::clearItem)
+            mutable.update { current ->
+                val updatedCatalog = if (current.wall && cachedWallAll.isNotEmpty()) {
+                    LibraryCatalog.entries(cachedWallAll)
+                } else {
+                    current.catalogItems.map(::clearItem)
+                }
+                val updatedItems = if (current.wall && cachedWallAll.isNotEmpty()) {
+                    computeWallItems(updatedCatalog, cachedWallAll, recentList, current.catalogFilter, current.series, current.catalogSort, current.localSearch)
+                } else {
+                    current.items.map(::clearItem)
+                }
+                current.copy(
+                    recent = recentList,
+                    selected = current.selected?.let(::clearItem),
+                    directoryFiles = current.directoryFiles.map(::clearItem),
+                    catalogItems = updatedCatalog,
+                    items = updatedItems,
+                    seriesEpisodes = current.seriesEpisodes.map(::clearItem),
+                    warning = "已清除续播记录"
+                )
+            }
+        }
+    }
+    fun removeConnection(id: String, onRemoved: () -> Unit = {}) {
+        val wasPlaying = state.value.playing != null
+        val activeRemoved = state.value.connection?.id == id
+        scanJob?.cancel()
+        browseJob?.cancel()
+        userActionJob?.cancel()
+        serverHomeJob?.cancel()
+        nextEpisodeJob?.cancel()
+        playJob?.cancel()
+        if (activeRemoved) {
+            provider?.close()
+            provider = null
+            history.clear()
+            preSearchServerView = null
+            cachedWallAll = emptyList()
+        }
+        viewModelScope.launch {
+            if (wasPlaying) {
+                coordinator.stop()
+                engine.release()
+            }
+            withContext(Dispatchers.IO) {
+                library.removeConnection(id)
+            }
+            listOf("$id:password", "$id:token", "draft:$id:password", "draft:$id:token").forEach { secrets.remove(it) }
+            scanPreferences.clearSource(id)
+            thumbnails.removeSource(id)
+            uiPreferences.edit().apply {
+                remove("catalog:$id")
+                if (uiPreferences.getString("source", null) == id) remove("source")
+            }.apply()
+            val (nextConnections, nextDrafts, fallback) = withContext(Dispatchers.IO) {
+                Triple(displayedConnections(), library.drafts(), library.connections().firstOrNull())
+            }
+            if (activeRemoved) {
+                mutable.value = BrowserState(
+                    connections = nextConnections,
+                    drafts = nextDrafts,
+                    tmdbEnabled = state.value.tmdbEnabled,
+                    catalogSort = state.value.catalogSort,
+                    warning = "已删除媒体来源"
+                )
+                if (fallback != null) selectConnection(fallback)
+            } else {
+                mutable.update {
+                    it.copy(
+                        connections = nextConnections,
+                        drafts = nextDrafts,
+                        warning = "已删除媒体来源"
+                    )
+                }
+            }
+            onRemoved()
+        }
+    }
+    private suspend fun resolveSeriesContext(
         source: MediaSourceProvider,
         current: MediaItem,
         snapshot: BrowserState
-    ): MediaItem? {
-        LibraryCatalog.findNextEpisode(current, snapshot.items)?.let { return it }
-        if (source is WebDavProvider) {
-            LibraryCatalog.findNextEpisode(current, library.items(source.connection.id))?.let { return it }
-            if (current.kind == MediaKind.EPISODE || current.season != null || current.episode != null) {
-                val directory = current.path.substringBeforeLast('/') + "/"
-                val entries = runCatching { source.listEntries(directory) }.getOrDefault(emptyList())
-                val siblings = entries.filter { !it.directory && it.extension in videoExtensions }
-                    .map { FilenameParser.parse(source.item(it)) }
-                LibraryCatalog.findNextEpisode(current, siblings)?.let { return it }
+    ): Pair<List<MediaItem>, MediaItem?> {
+        val key = current.seriesKey?.takeIf { it.isNotBlank() } ?: current.series?.takeIf { it.isNotBlank() }
+        val episodes: List<MediaItem> = when (source) {
+            is WebDavProvider -> {
+                val allIndexed = library.items(source.connection.id)
+                val fromCatalog = if (key != null) {
+                    allIndexed.filter {
+                        it.id.sourceId == current.id.sourceId &&
+                            !it.isFolder &&
+                            (it.kind == MediaKind.EPISODE || it.season != null || it.episode != null || it.id == current.id) &&
+                            ((it.seriesKey?.takeIf { k -> k.isNotBlank() } ?: it.series) == key)
+                    }
+                } else emptyList()
+                val rawList = when {
+                    fromCatalog.size > 1 -> fromCatalog
+                    snapshot.series != null && snapshot.items.isNotEmpty() -> snapshot.items
+                    current.kind == MediaKind.EPISODE || current.season != null || current.episode != null -> {
+                        val directory = current.path.substringBeforeLast('/') + "/"
+                        val pos = library.positions(source.connection.id)
+                        val entries = runCatching { source.listEntries(directory) }.getOrDefault(emptyList())
+                        entries.filter { !it.directory && it.extension in videoExtensions }
+                            .map { entry ->
+                                val parsed = FilenameParser.parse(source.item(entry))
+                                parsed.copy(resumeMs = pos[parsed.id.value] ?: parsed.resumeMs)
+                            }
+                    }
+                    else -> emptyList()
+                }
+                (if (rawList.any { it.id == current.id }) rawList else rawList + current)
+                    .distinctBy { it.id }
+                    .sortedWith(
+                        compareBy<MediaItem> { it.season ?: Int.MAX_VALUE }
+                            .thenBy { it.episode ?: Int.MAX_VALUE }
+                            .thenBy { it.title }
+                            .thenBy { it.path }
+                    )
             }
-            return null
+            is MediaServerProvider -> runCatching { source.seriesEpisodes(current) }.getOrDefault(emptyList())
+            else -> emptyList()
         }
-        if (source is MediaServerProvider) {
-            return runCatching { source.nextEpisode(current) }.getOrNull()
-        }
-        return null
+        val next = LibraryCatalog.findNextEpisode(current, episodes.ifEmpty { snapshot.items })
+        return episodes to next
     }
     fun play(item: MediaItem, compatible: Boolean = false, resumeOverride: Long? = null) {
         if(playJob?.isActive == true) return
@@ -462,13 +752,19 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
                 }
                 coordinator.open(source, PlaybackRequest(fresh, DeviceCapabilities.profile(), compatible))
                 autoAdvancedFromId = null
-                mutable.update { it.copy(playing = fresh, selected = null, nextEpisode = null) }
+                val keepSeriesEpisodes = state.value.seriesEpisodes.takeIf { list -> list.any { it.id == fresh.id } }.orEmpty()
+                mutable.update { it.copy(playing = fresh, selected = null, seriesEpisodes = keepSeriesEpisodes, nextEpisode = null) }
                 nextEpisodeJob?.cancel()
                 val snapshot = state.value
                 nextEpisodeJob = viewModelScope.launch {
-                    val next = withContext(Dispatchers.IO) { resolveNextEpisode(source, fresh, snapshot) }
+                    val (episodes, next) = withContext(Dispatchers.IO) { resolveSeriesContext(source, fresh, snapshot) }
                     if (state.value.playing?.id == fresh.id) {
-                        mutable.update { it.copy(nextEpisode = next) }
+                        mutable.update {
+                            it.copy(
+                                seriesEpisodes = if (episodes.size > 1) episodes else emptyList(),
+                                nextEpisode = next
+                            )
+                        }
                     }
                 }
             } catch(e: CancellationException) { throw e }
@@ -483,8 +779,37 @@ class PlayerModel(application: Application) : AndroidViewModel(application) {
         playJob = viewModelScope.launch {
             captureFrame?.invoke()
             coordinator.stop(); engine.release()
-            val recentList = withContext(Dispatchers.IO) { state.value.connection?.id?.let(library::recent).orEmpty() }
-            mutable.update { it.copy(playing = null, busy = false, recent = recentList, nextEpisode = null) }
+            val cid = state.value.connection?.id
+            val (recentList, positions) = withContext(Dispatchers.IO) {
+                (cid?.let(library::recent).orEmpty()) to (cid?.let(library::positions).orEmpty())
+            }
+            fun applyPos(list: List<MediaItem>) = list.map { entry ->
+                val p = positions[entry.id.value]
+                if (p != null) entry.copy(resumeMs = p) else entry
+            }
+            cachedWallAll = applyPos(cachedWallAll)
+            mutable.update { current ->
+                val updatedCatalog = if (current.wall && cachedWallAll.isNotEmpty()) {
+                    LibraryCatalog.entries(cachedWallAll)
+                } else {
+                    applyPos(current.catalogItems)
+                }
+                val updatedItems = if (current.wall && cachedWallAll.isNotEmpty()) {
+                    computeWallItems(updatedCatalog, cachedWallAll, recentList, current.catalogFilter, current.series, current.catalogSort, current.localSearch)
+                } else {
+                    applyPos(current.items)
+                }
+                current.copy(
+                    playing = null,
+                    busy = false,
+                    recent = recentList,
+                    directoryFiles = applyPos(current.directoryFiles),
+                    catalogItems = updatedCatalog,
+                    items = updatedItems,
+                    seriesEpisodes = emptyList(),
+                    nextEpisode = null
+                )
+            }
             refreshServerHome()
         }
     }

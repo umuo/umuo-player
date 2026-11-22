@@ -44,6 +44,8 @@ allConnections:
 SELECT * FROM connections ORDER BY source_id;
 saveConnection:
 INSERT OR REPLACE INTO connections VALUES (?, ?);
+removeConnection:
+DELETE FROM connections WHERE source_id = ?;
 clearSourceMedia:
 DELETE FROM indexed_media WHERE source_id = ?;
 clearSourcePositions:
@@ -70,6 +72,8 @@ setOverride:
 INSERT OR REPLACE INTO metadata_override VALUES (?, ?, ?);
 position:
 SELECT milliseconds FROM playback_position WHERE source_id = ? AND media_id = ?;
+allPositions:
+SELECT media_id, milliseconds FROM playback_position WHERE source_id = ?;
 savePosition:
 INSERT OR REPLACE INTO playback_position(source_id, media_id, milliseconds, updated_at)
 VALUES (

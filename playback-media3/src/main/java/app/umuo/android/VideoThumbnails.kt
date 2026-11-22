@@ -40,6 +40,17 @@ class VideoThumbnails(context: Context, private val connection: (String) -> Sour
     @Synchronized private fun unmarkAttempted(key: String) {
         attempted.remove(key)
     }
+    @Synchronized fun removeSource(sourceId: String) {
+        val prefix = "$sourceId\u0000"
+        val iterator = clients.entries.iterator()
+        while (iterator.hasNext()) {
+            val (key, client) = iterator.next()
+            if (key.startsWith(prefix)) {
+                client.shutdownCleanly()
+                iterator.remove()
+            }
+        }
+    }
     @Synchronized fun close() {
         clients.values.forEach { it.shutdownCleanly() }
         clients.clear()

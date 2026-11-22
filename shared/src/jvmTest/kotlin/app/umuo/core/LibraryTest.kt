@@ -184,4 +184,42 @@ class LibraryTest {
         assertEquals(dirEp2, LibraryCatalog.findNextEpisode(dirEp1, listOf(dirEp2, otherDirEp3, dirEp1)))
         assertNull(LibraryCatalog.findNextEpisode(dirEp2, listOf(dirEp2, otherDirEp3, dirEp1)))
     }
+
+    @Test fun removeConnectionClearsOnlyTargetSourceAndItemsReflectPositions() {
+        val (r, driver) = repository()
+        try {
+            val a = SourceConnection("a", "NAS A", SourceKind.WEBDAV, "https://a.test/", "alice")
+            val b = SourceConnection("b", "NAS B", SourceKind.WEBDAV, "https://b.test/", "bob")
+            r.saveConnection(a)
+            r.saveConnection(b)
+            r.saveDraft(a.copy(name = "Draft A"))
+            val m1 = MediaItem(MediaId("a", "1"), "Film A", MediaKind.MOVIE, metadataOrigin = MetadataOrigin.NFO, durationMs = 120_000)
+            val m2 = MediaItem(MediaId("b", "1"), "Film B", MediaKind.MOVIE, metadataOrigin = MetadataOrigin.NFO, durationMs = 120_000)
+            r.upsert(m1, "/")
+            r.upsert(m2, "/")
+            r.savePosition(m1.id, 45_000)
+            r.savePosition(m2.id, 25_000)
+            r.match(m1, m1.copy(title = "Override A"))
+            r.enqueue("a", "/sub/")
+            r.enqueue("b", "/sub/")
+
+            assertEquals(45_000, r.items("a").single().resumeMs)
+            assertEquals(45_000, r.detailed(m1).resumeMs)
+            r.savePosition(m1.id, 0L)
+            assertEquals(0L, r.detailed(m1.copy(resumeMs = 9_000L)).resumeMs)
+
+            r.removeConnection("a")
+            assertEquals(listOf(b), r.connections())
+            assertTrue(r.drafts().none { it.id == "a" })
+            assertTrue(r.items("a").isEmpty())
+            assertEquals(0L, r.position(m1.id))
+            assertTrue(r.pending("a").isEmpty())
+            assertTrue(r.automaticMatchAllowed(m1.id))
+
+            assertEquals(25_000, r.items("b").single().resumeMs)
+            assertEquals(listOf("/sub/"), r.pending("b"))
+        } finally {
+            driver.close()
+        }
+    }
 }

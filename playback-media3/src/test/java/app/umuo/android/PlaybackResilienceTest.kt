@@ -116,4 +116,25 @@ class PlaybackResilienceTest {
         assertEquals(seriesContinuationKey(dirEp1), seriesContinuationKey(dirEp2))
         assertFalse(seriesContinuationKey(dirEp1) == seriesContinuationKey(dirOtherSource))
     }
+
+    @Test fun tvSeekDeltaAcceleratesWithRepeatCountAndTimeLabelFormatsHours() {
+        assertEquals(10_000L, tvSeekDeltaMs(10, 0))
+        assertEquals(20_000L, tvSeekDeltaMs(10, 1))
+        assertEquals(20_000L, tvSeekDeltaMs(10, 4))
+        assertEquals(30_000L, tvSeekDeltaMs(10, 5))
+        assertEquals(60_000L, tvSeekDeltaMs(10, 13))
+        assertEquals(5_000L, tvSeekDeltaMs(5, 0))
+        assertEquals(20_000L, tvSeekDeltaMs(5, 2))
+        assertEquals(60_000L, tvSeekDeltaMs(30, 2))
+
+        assertEquals("0:00", timeLabel(-500L))
+        assertEquals("24:15", timeLabel((24 * 60 + 15) * 1_000L))
+        assertEquals("2:05:09", timeLabel((2 * 3600 + 5 * 60 + 9) * 1_000L))
+    }
+
+    @Test fun subtitleBackgroundAndScaleModesHaveReadableLabels() {
+        assertEquals(listOf("透明描边", "半透黑底", "暖黄字幕"), SubtitleBackground.entries.map { it.label })
+        assertEquals(listOf("适应", "铺满", "拉伸"), VideoScaleMode.entries.map { it.label })
+        assertEquals(GestureSettings().subtitleBackground, SubtitleBackground.NONE)
+    }
 }

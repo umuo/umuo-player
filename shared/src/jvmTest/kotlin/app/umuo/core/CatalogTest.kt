@@ -109,4 +109,40 @@ class CatalogTest {
             assertTrue(restored.items("dav").any {it.title=="Raw" && !it.hasMetadata})
         } finally {provider.close();client.close();driver.close()}
     }
+
+    @Test fun sortSearchAndWebDavBreadcrumbsBehavePredictably() {
+        val movieOld = item("m1", "Alpha").copy(metadataOrigin = MetadataOrigin.NFO, year = 2010, genres = listOf("SciFi"))
+        val movieNew = item("m2", "Zulu").copy(metadataOrigin = MetadataOrigin.NFO, year = 2024, overview = "Deep Space")
+        val ep = MediaItem(
+            MediaId("dav", "ep1"), "Pilot", MediaKind.EPISODE,
+            path = "https://dav.test/videos/My%20Show/S01E01.mp4",
+            series = "Beta Series", seriesKey = "/My%20Show/", season = 1, episode = 1,
+            resumeMs = 15_000L, metadataOrigin = MetadataOrigin.NFO
+        )
+        val all = listOf(movieOld, movieNew, ep)
+        val catalog = LibraryCatalog.entries(all)
+        val seriesEntry = catalog.first { it.kind == MediaKind.SERIES }
+        assertEquals(15_000L, seriesEntry.resumeMs)
+
+        assertEquals(listOf("Alpha", "Beta Series", "Zulu"), LibraryCatalog.sort(catalog, CatalogSort.TITLE).map { it.title })
+        assertEquals(listOf("Zulu", "Alpha", "Beta Series"), LibraryCatalog.sort(catalog, CatalogSort.YEAR_DESC).map { it.title })
+        val recentFirst = LibraryCatalog.sort(catalog, CatalogSort.RECENT, listOf(ep.id, movieNew.id), all)
+        assertEquals(listOf("Beta Series", "Zulu", "Alpha"), recentFirst.map { it.title })
+
+        assertEquals(listOf(movieOld), LibraryCatalog.searchLocal(catalog, "scifi alpha"))
+        assertEquals(listOf(movieNew), LibraryCatalog.searchLocal(catalog, "deep space 2024"))
+        assertEquals(listOf(ep), LibraryCatalog.searchLocal(listOf(ep), "s01e01"))
+        assertEquals(catalog, LibraryCatalog.searchLocal(catalog, "   "))
+
+        val crumbs = LibraryCatalog.breadcrumbs("https://dav.test/videos", "https://dav.test/videos/4K%20HDR/Action/")
+        assertEquals(
+            listOf(
+                PathBreadcrumb("根目录", null),
+                PathBreadcrumb("4K HDR", "https://dav.test/videos/4K%20HDR/"),
+                PathBreadcrumb("Action", "https://dav.test/videos/4K%20HDR/Action/")
+            ),
+            crumbs
+        )
+        assertEquals(listOf(PathBreadcrumb("根目录", null)), LibraryCatalog.breadcrumbs("https://dav.test/videos/", null))
+    }
 }

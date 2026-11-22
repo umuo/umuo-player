@@ -13,6 +13,9 @@ import kotlin.coroutines.EmptyCoroutineContext
 internal fun isUserPaused(state: PlaybackState): Boolean =
     state.paused || (!state.playing && !state.buffering && !state.ended)
 
+internal fun isNearCompletion(positionMs: Long, durationMs: Long, ended: Boolean): Boolean =
+    ended || (durationMs >= 180_000L && positionMs >= (durationMs * 95L) / 100L)
+
 /** 单个播放会话；START/PROGRESS/STOP 串行上报，停止失败不触发重复计数重试。 */
 class PlaybackCoordinator(
     private val engine: PlaybackEngine,
@@ -85,9 +88,9 @@ class PlaybackCoordinator(
     }
     private suspend fun report(
         source: MediaSourceProvider, current: PlaybackPlan, kind: PlaybackEventKind,
-        state: PlaybackState, paused: Boolean = isUserPaused(state)
+        state: PlaybackState, paused: Boolean = isUserPaused(state), completed: Boolean = state.ended
     ) {
-        try { withTimeout(8_000) { source.report(current, PlaybackEvent(kind, state.positionMs, paused, state.ended)) } }
+        try { withTimeout(8_000) { source.report(current, PlaybackEvent(kind, state.positionMs, paused, completed)) } }
         catch (e: CancellationException) { if (e !is TimeoutCancellationException) throw e; warning("服务器进度上报超时，本地记录已保留") }
         catch (_: Exception) { warning("服务器进度上报失败，本地记录已保留") }
     }
@@ -97,14 +100,16 @@ class PlaybackCoordinator(
         val source = provider ?: return
         val state = engine.state.value
         val paused = isUserPaused(state)
+        val effectiveDuration = state.durationMs.takeIf { it > 0 } ?: current.item.durationMs
+        val completed = isNearCompletion(state.positionMs, effectiveDuration, state.ended)
         engine.pause()
         withContext(NonCancellable) {
             if ((state.ready || everReady || started) && state.error == null) {
                 withContext(ioContext) {
-                    library.savePosition(current.item.id, if (state.ended) 0 else state.positionMs)
+                    library.savePosition(current.item.id, if (completed) 0L else state.positionMs)
                 }
             }
-            if (started) report(source, current, PlaybackEventKind.STOP, state, paused)
+            if (started) report(source, current, PlaybackEventKind.STOP, state, paused, completed)
             try { withTimeout(8_000) { source.closeSession(current) } }
             catch (_: Exception) { warning("服务器播放会话释放失败，请检查连接") }
         }

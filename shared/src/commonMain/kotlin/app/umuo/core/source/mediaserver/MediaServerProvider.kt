@@ -84,16 +84,17 @@ abstract class MediaServerProvider(
         require(id.sourceId == connection.id)
         return mapItem(transport.json(apiPath("Users/${connection.userId}/Items/${id.value.encodeURLPathPart()}")))
     }
-    suspend fun nextEpisode(item: MediaItem): MediaItem? {
+    suspend fun seriesEpisodes(item: MediaItem): List<MediaItem> {
         require(item.id.sourceId == connection.id)
-        val seriesId = item.seriesKey?.takeIf { it.isNotBlank() } ?: return null
+        val seriesId = item.seriesKey?.takeIf { it.isNotBlank() } ?: return emptyList()
         val route = apiPath("Users/${connection.userId}/Items") +
             "?ParentId=${seriesId.encodeURLParameter()}&Recursive=true&IncludeItemTypes=Episode" +
             "&Fields=Overview,MediaSources,Genres,Tags&EnableUserData=true" +
             "&SortBy=ParentIndexNumber,IndexNumber,SortName&SortOrder=Ascending&Limit=500"
-        val episodes = transport.json(route).rows("Items").map(::mapItem)
-        return LibraryCatalog.findNextEpisode(item, episodes)
+        return transport.json(route).rows("Items").map(::mapItem)
+            .sortedWith(compareBy<MediaItem> { it.season ?: Int.MAX_VALUE }.thenBy { it.episode ?: Int.MAX_VALUE }.thenBy { it.title })
     }
+    suspend fun nextEpisode(item: MediaItem): MediaItem? = LibraryCatalog.findNextEpisode(item, seriesEpisodes(item))
     private fun mapItem(row: JsonObject): MediaItem {
         val id = row.text("Id")
         val userData = row["UserData"] as? JsonObject

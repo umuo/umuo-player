@@ -14,7 +14,11 @@ import app.umuo.android.BrowserState
 import app.umuo.core.library.*
 
 @Composable
-internal fun TvCatalogFilters(state: BrowserState, onFilter: (CatalogFilter) -> Unit) {
+internal fun TvCatalogFilters(
+    state: BrowserState,
+    onFilter: (CatalogFilter) -> Unit,
+    onSort: (CatalogSort) -> Unit = {}
+) {
     val filter=state.catalogFilter
     var expanded by rememberSaveable(state.connection?.id) {mutableStateOf(false)}
     val facets=remember(state.catalogItems,filter) {LibraryCatalog.facets(state.catalogItems,filter)}
@@ -22,13 +26,20 @@ internal fun TvCatalogFilters(state: BrowserState, onFilter: (CatalogFilter) -> 
         Row(horizontalArrangement=Arrangement.spacedBy(16.dp)) {
             Button(onClick={expanded=!expanded}){Text(if(expanded)"收起筛选" else "展开筛选",fontSize=12.sp)}
             if(filter.active)Button(onClick={onFilter(CatalogFilter())}) {Text("清除筛选",fontSize=12.sp)}
-            Text(if(filter.active)"已筛选 · ${state.items.size} 部" else "全部已刮削影视",fontSize=12.sp)
+            val summary = listOfNotNull(
+                if (filter.active) "已筛选 · ${state.items.size} 部" else "全部已刮削影视",
+                state.catalogSort.takeIf { it != CatalogSort.TITLE }?.let { "排序：${it.label}" }
+            ).joinToString(" · ")
+            Text(summary,fontSize=12.sp)
         }
         AnimatedVisibility(expanded) {
             LazyRow(horizontalArrangement=Arrangement.spacedBy(10.dp),contentPadding=PaddingValues(5.dp)) {
                 items(CatalogType.entries) {type->
                     val label=when(type) {CatalogType.ALL->"全部影视";CatalogType.MOVIES->"电影";CatalogType.SERIES->"剧集"}
                     FilterButton(label,filter.type==type) {onFilter(filter.copy(type=type))}
+                }
+                items(CatalogSort.entries) { sortOption ->
+                    FilterButton("排序 · ${sortOption.label}", state.catalogSort == sortOption) { onSort(sortOption) }
                 }
                 items(facets.genres,key={"genre:${it.value}"}) {option->FilterButton("类型 · ${option.value} (${option.count})",filter.genre==option.value,option.count>0 || filter.genre==option.value){onFilter(filter.copy(genre=if(filter.genre==option.value)null else option.value))}}
                 items(facets.tags,key={"tag:${it.value}"}) {option->FilterButton("标签 · ${option.value} (${option.count})",filter.tag==option.value,option.count>0 || filter.tag==option.value){onFilter(filter.copy(tag=if(filter.tag==option.value)null else option.value))}}

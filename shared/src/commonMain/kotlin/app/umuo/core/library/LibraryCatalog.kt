@@ -1,8 +1,14 @@
 package app.umuo.core.library
 
 import app.umuo.core.model.*
+import app.umuo.core.network.normalizedBase
+import app.umuo.core.network.origin
+import io.ktor.http.Url
+import io.ktor.http.decodeURLPart
 
 enum class CatalogType { ALL, MOVIES, SERIES }
+enum class CatalogSort(val label: String) { TITLE("按标题"), YEAR_DESC("按年份"), RECENT("最近观看") }
+data class PathBreadcrumb(val label: String, val path: String?)
 data class CatalogFilter(
     val type: CatalogType = CatalogType.ALL,
     val genre: String? = null,
@@ -29,12 +35,91 @@ object LibraryCatalog {
                     id = show?.id ?: MediaId(identity.first, "series:${identity.second}"),
                     title = show?.title ?: first.series ?: first.title,
                     kind = MediaKind.SERIES, seriesKey = identity.second,
+                    resumeMs = episodes.maxOfOrNull { it.resumeMs } ?: 0L,
                     genres = (show?.genres.orEmpty() + episodes.flatMap {it.genres}).distinct(),
                     tags = (show?.tags.orEmpty() + episodes.flatMap {it.tags}).distinct(),
                     collections = ((show?.let(::collections)).orEmpty()+episodes.flatMap(::collections)).distinct()
                 )
             }
         return (movies + series).sortedBy { it.title.lowercase() }
+    }
+
+    fun sort(
+        items: List<MediaItem>,
+        sort: CatalogSort,
+        recentIds: List<MediaId> = emptyList(),
+        allItems: List<MediaItem> = emptyList()
+    ): List<MediaItem> = when (sort) {
+        CatalogSort.TITLE -> items.sortedBy { it.title.lowercase() }
+        CatalogSort.YEAR_DESC -> items.sortedWith(
+            compareByDescending<MediaItem> { it.year ?: Int.MIN_VALUE }.thenBy { it.title.lowercase() }
+        )
+        CatalogSort.RECENT -> {
+            val rank = recentIds.withIndex().associate { (index, id) -> id to index }
+            val seriesRank = mutableMapOf<Pair<String, String>, Int>()
+            for (item in allItems) {
+                val r = rank[item.id] ?: continue
+                if (item.kind == MediaKind.EPISODE || item.seriesKey != null || item.series != null) {
+                    val key = item.id.sourceId to seriesKey(item)
+                    val prev = seriesRank[key]
+                    if (prev == null || r < prev) seriesRank[key] = r
+                }
+            }
+            items.sortedWith(
+                compareBy<MediaItem> { item ->
+                    if (item.kind == MediaKind.SERIES) {
+                        seriesRank[item.id.sourceId to (item.seriesKey ?: item.series ?: item.title)]
+                            ?: rank[item.id]
+                            ?: Int.MAX_VALUE
+                    } else {
+                        rank[item.id] ?: Int.MAX_VALUE
+                    }
+                }.thenBy { it.title.lowercase() }
+            )
+        }
+    }
+
+    fun searchLocal(items: List<MediaItem>, query: String): List<MediaItem> {
+        val tokens = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return items
+        return items.filter { item ->
+            val fileName = item.path.trimEnd('/').substringAfterLast('/').let { segment ->
+                runCatching { segment.decodeURLPart() }.getOrDefault(segment)
+            }
+            val haystack = buildList {
+                add(item.title)
+                item.series?.let(::add)
+                add(item.overview)
+                item.year?.toString()?.let(::add)
+                addAll(item.genres)
+                addAll(item.tags)
+                addAll(collections(item))
+                add(fileName)
+            }.joinToString(" ").lowercase()
+            tokens.all { it in haystack }
+        }
+    }
+
+    fun breadcrumbs(baseUrl: String, currentParent: String?): List<PathBreadcrumb> {
+        val root = PathBreadcrumb("根目录", null)
+        val raw = currentParent?.trim()?.takeIf { it.isNotEmpty() } ?: return listOf(root)
+        val normalizedRoot = normalizedBase(baseUrl)
+        val normalizedTarget = raw.trimEnd('/') + "/"
+        if (origin(normalizedTarget) != origin(normalizedRoot)) return listOf(root)
+        val rootPath = Url(normalizedRoot).encodedPath.trimEnd('/') + "/"
+        val targetPath = Url(normalizedTarget).encodedPath.trimEnd('/') + "/"
+        if (!targetPath.startsWith(rootPath)) return listOf(root)
+        val relative = targetPath.removePrefix(rootPath).trim('/')
+        if (relative.isEmpty()) return listOf(root)
+        val segments = relative.split('/').filter { it.isNotEmpty() }
+        val result = mutableListOf(root)
+        var prefix = normalizedRoot.trimEnd('/')
+        for (segment in segments) {
+            prefix = "$prefix/$segment"
+            val label = runCatching { segment.decodeURLPart() }.getOrDefault(segment)
+            result += PathBreadcrumb(label, "$prefix/")
+        }
+        return result
     }
 
     fun episodes(all: List<MediaItem>, key: String): List<MediaItem> = all.filter {
